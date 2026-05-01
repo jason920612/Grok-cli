@@ -1,0 +1,36 @@
+{
+  "name": "grok-code",
+  "version": "0.1.0",
+  "description": "A local coding agent CLI powered by xAI Grok Responses API.",
+  "type": "module",
+  "bin": {
+    "grok-code": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "lint": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^7.3.2",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "diff": "^7.0.0",
+    "dotenv": "^16.4.7",
+    "fast-glob": "^3.3.3",
+    "ignore": "^7.0.3",
+    "openai": "^4.85.4",
+    "ora": "^8.2.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/diff": "^7.0.1",
+    "@types/node": "^22.13.5",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}
