@@ -36,9 +36,9 @@ export class Agent {
     await this.tools.execute("git_status", {}, toolCtx);
   }
 
-  async run(task: string, oneShot: boolean): Promise<string> {
+  async run(task: string, oneShot: boolean, signal?: AbortSignal): Promise<string> {
     const loop = new AgentLoop(this.client, this.config, this.context, this.tools, this.toolContext(), this.skillLoader, this.toolSkills, this.skillLoader.projectInstructions());
-    return loop.run(task, oneShot);
+    return loop.run(task, oneShot, signal);
   }
 
   toolContext() {

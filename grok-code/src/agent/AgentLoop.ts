@@ -23,7 +23,7 @@ export class AgentLoop {
     private readonly projectInstructions: string
   ) {}
 
-  async run(task: string, oneShot: boolean): Promise<string> {
+  async run(task: string, oneShot: boolean, signal?: AbortSignal): Promise<string> {
     let previousResponseId: string | undefined;
     let finalText = "";
     const usedToolNames = new Set<string>();
@@ -41,16 +41,23 @@ export class AgentLoop {
     });
 
     while (step <= this.config.maxSteps) {
+      throwIfAborted(signal);
       this.context.nextStep(task);
       const spinner = ora(`Grok thinking (step ${step})`).start();
-      const response = await createResponse(this.client, {
-        model: this.config.model,
-        input: pendingInput,
-        tools: this.tools.schemas(serverTools(this.config)),
-        toolChoice: this.config.toolChoice,
-        previousResponseId
-      });
-      spinner.stop();
+      let response: any;
+      try {
+        response = await createResponse(this.client, {
+          model: this.config.model,
+          input: pendingInput,
+          tools: this.tools.schemas(serverTools(this.config)),
+          toolChoice: this.config.toolChoice,
+          previousResponseId,
+          signal
+        });
+      } finally {
+        spinner.stop();
+      }
+      throwIfAborted(signal);
       const parsed = parseResponse(response);
       previousResponseId = parsed.id || previousResponseId;
       if (parsed.functionCalls.length === 0) {
@@ -59,6 +66,7 @@ export class AgentLoop {
       }
 
       const outputs = await Promise.all(parsed.functionCalls.map(async (call) => {
+        throwIfAborted(signal);
         usedToolNames.add(call.name);
         let args: unknown;
         try {
@@ -69,6 +77,7 @@ export class AgentLoop {
           return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
         }
         const result = await this.tools.execute(call.name, args, this.toolCtx);
+        throwIfAborted(signal);
         if (call.name === "apply_patch" && result.ok) hasModifiedFiles.value = true;
         this.context.add({
           type: "shell_output",
@@ -89,9 +98,14 @@ export class AgentLoop {
       toolCtx: this.toolCtx,
       hasModifiedFiles: hasModifiedFiles.value
     });
-    const suffix = `\n\n[Final checks]\nBackground: ${gate.backgroundStatus}\nDiff checked: ${gate.diffChecked ? "yes" : "not needed"}`;
+    const diffSection = gate.diffPreview ? `\n\n[Diff preview]\n${gate.diffPreview}` : "";
+    const suffix = `${diffSection}\n\n[Final checks]\nBackground: ${gate.backgroundStatus}\nDiff checked: ${gate.diffChecked ? "yes" : "not needed"}`;
     return finalText ? `${finalText}${suffix}` : `Stopped after max steps without a final model message.${suffix}`;
   }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error("Interrupted by user.");
 }
 
 function serverTools(config: GrokCodeConfig): ResponseTool[] {

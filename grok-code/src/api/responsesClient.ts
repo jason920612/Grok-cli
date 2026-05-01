@@ -10,6 +10,7 @@ export type CreateResponseOptions = {
   tools: ResponseTool[];
   toolChoice: ToolChoice;
   previousResponseId?: string;
+  signal?: AbortSignal;
 };
 
 export async function createResponse(client: OpenAI, options: CreateResponseOptions): Promise<any> {
@@ -21,5 +22,5 @@ export async function createResponse(client: OpenAI, options: CreateResponseOpti
     parallel_tool_calls: true
   };
   if (options.previousResponseId) payload.previous_response_id = options.previousResponseId;
-  return (client as any).responses.create(payload);
+  return (client as any).responses.create(payload, options.signal ? { signal: options.signal } : undefined);
 }

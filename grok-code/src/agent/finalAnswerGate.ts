@@ -9,7 +9,7 @@ export async function finalAnswerGate(options: {
   tools: ToolRegistry;
   toolCtx: ToolExecutionContext;
   hasModifiedFiles: boolean;
-}): Promise<{ backgroundStatus: string; diffChecked: boolean }> {
+}): Promise<{ backgroundStatus: string; diffChecked: boolean; diffPreview?: string }> {
   const running = options.background.listRunning();
   let backgroundStatus = "No running background commands.";
   if (running.length > 0 && options.oneShot && !options.userAskedToKeepBackground) {
@@ -20,10 +20,18 @@ export async function finalAnswerGate(options: {
   }
 
   let diffChecked = false;
+  let diffPreview: string | undefined;
   if (options.hasModifiedFiles) {
     await options.tools.execute("git_status", {}, options.toolCtx);
-    await options.tools.execute("git_diff", {}, options.toolCtx);
+    const diffResult = await options.tools.execute("git_diff", {}, options.toolCtx);
+    if (diffResult.ok && isDiffData(diffResult.data)) {
+      diffPreview = [`git diff --stat`, diffResult.data.stat, `git diff`, diffResult.data.diff].filter(Boolean).join("\n");
+    }
     diffChecked = true;
   }
-  return { backgroundStatus, diffChecked };
+  return { backgroundStatus, diffChecked, diffPreview };
+}
+
+function isDiffData(value: unknown): value is { stat: string; diff: string } {
+  return typeof value === "object" && value !== null && "stat" in value && "diff" in value;
 }

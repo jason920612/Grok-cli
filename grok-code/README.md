@@ -65,6 +65,32 @@ Global flags:
 --enable-x-search
 ```
 
+## Interactive Mode
+
+Run `grok-code` with no task to enter interactive mode.
+
+- Type `/` to open the slash command menu.
+- Use Up/Down arrows to choose a command.
+- Press Enter to accept and run the highlighted command.
+- Press Esc while editing the prompt to cancel the command menu and clear the current input.
+- Press Esc while a model request is running to interrupt the current request.
+
+Useful slash commands:
+
+```txt
+/help
+/status
+/diff
+/learn-project
+/context
+/compact
+/skills
+/tools
+/env
+/bg
+/exit
+```
+
 ## Function Calling Architecture
 
 The agent uses `client.responses.create(...)` from the `openai` npm package with:
@@ -210,6 +236,12 @@ Review a diff:
 
 ```bash
 grok-code review
+```
+
+Show a git-style diff in interactive mode:
+
+```txt
+/diff
 ```
 
 Start and stop a dev server:

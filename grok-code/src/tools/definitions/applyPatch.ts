@@ -32,11 +32,21 @@ export function applyPatchTool(skills: ToolSkillRegistry) {
         modified.push(target);
       }
       console.log(chalk.green("Applied patch:"));
-      console.log(args.patch);
+      console.log(colorUnifiedDiff(args.patch));
       ctx.context.add({ type: "patch", content: args.patch, priority: 85, source: { command: args.reason } });
       return { modifiedFiles: modified, reminder: "Run git_diff and the smallest relevant tests/checks before final answer." };
     }
   );
+}
+
+function colorUnifiedDiff(patch: string): string {
+  return patch.split(/\r?\n/).map((line) => {
+    if (line.startsWith("+") && !line.startsWith("+++")) return chalk.green(line);
+    if (line.startsWith("-") && !line.startsWith("---")) return chalk.red(line);
+    if (line.startsWith("@@")) return chalk.cyan(line);
+    if (line.startsWith("diff ") || line.startsWith("index ")) return chalk.dim(line);
+    return line;
+  }).join("\n");
 }
 
 function cleanPatchPath(fileName?: string): string | undefined {
