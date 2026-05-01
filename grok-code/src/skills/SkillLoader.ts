@@ -15,7 +15,13 @@ export class SkillLoader {
   select(task: string, max = 5): Skill[] {
     const lower = task.toLowerCase();
     const all = this.loadAll();
-    const selected = all.filter((skill) => skill.id === "context-hygiene" || skill.id === "project-local-setup" || skill.triggers.some((trigger) => lower.includes(trigger)));
+    const forcedSkillIds = forcedSkills(task);
+    const selected = all.filter((skill) =>
+      skill.id === "context-hygiene"
+      || skill.id === "project-local-setup"
+      || forcedSkillIds.includes(skill.id)
+      || skill.triggers.some((trigger) => lower.includes(trigger))
+    );
     if (/(run|test|build|install|lint|dev|server|command)/i.test(task)) {
       const env = all.find((skill) => skill.id === "environment-awareness");
       if (env && !selected.includes(env)) selected.push(env);
@@ -73,6 +79,11 @@ function triggersFor(id: string): string[] {
     "test-driven-fix": ["test", "failing", "regression"],
     "shell-usage": ["command", "shell", "run", "build", "lint"],
     "environment-awareness": ["environment", "install", "setup", "build", "test", "dev"],
-    "project-local-setup": ["install", "setup", "dependency", "tooling"]
+    "project-local-setup": ["install", "setup", "dependency", "tooling"],
+    "project-understanding": ["project-understanding"]
   }[id] ?? [id];
+}
+
+function forcedSkills(task: string): string[] {
+  return [...task.matchAll(/<Use Skill:\s*([a-z0-9-]+)\s*>/gi)].map((match) => match[1] ?? "");
 }

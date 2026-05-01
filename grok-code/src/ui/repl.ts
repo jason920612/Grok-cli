@@ -2,6 +2,7 @@ import { input } from "@inquirer/prompts";
 import chalk from "chalk";
 import type { Agent } from "../agent/Agent.js";
 import { formatContext } from "./formatters.js";
+import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
 
 export async function startRepl(agent: Agent): Promise<void> {
   console.log(chalk.dim("Type /help for commands, /exit to quit."));
@@ -30,6 +31,7 @@ async function handleSlash(command: string, agent: Agent): Promise<void> {
 /resume
 /context
 /compact
+/learn-project
 /skills
 /tools
 /env
@@ -50,6 +52,9 @@ async function handleSlash(command: string, agent: Agent): Promise<void> {
       break;
     case "/compact":
       console.log(agent.context.compactContext("interactive session").content);
+      break;
+    case "/learn-project":
+      console.log(await agent.run(PROJECT_UNDERSTANDING_TASK, false));
       break;
     case "/skills":
       console.log(agent.skillLoader.loadAll().map((skill) => `${skill.id}: ${skill.description}`).join("\n"));

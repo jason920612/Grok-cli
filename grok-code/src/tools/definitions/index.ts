@@ -7,6 +7,7 @@ import { getFileOverviewTool } from "./getFileOverview.js";
 import { readFileRangeTool } from "./readFileRange.js";
 import { searchTextTool } from "./searchText.js";
 import { searchSymbolsTool } from "./searchSymbols.js";
+import { createSkillTool } from "./createSkill.js";
 import { applyPatchTool } from "./applyPatch.js";
 import { runShellTool } from "./runShell.js";
 import { gitStatusTool } from "./gitStatus.js";
@@ -25,6 +26,7 @@ export const LOCAL_TOOL_NAMES = [
   "read_file_range",
   "search_text",
   "search_symbols",
+  "create_skill",
   "apply_patch",
   "run_shell",
   "git_status",
@@ -46,6 +48,7 @@ export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry
     readFileRangeTool(skills),
     searchTextTool(skills),
     searchSymbolsTool(skills),
+    createSkillTool(skills),
     applyPatchTool(skills),
     runShellTool(skills),
     gitStatusTool(skills),

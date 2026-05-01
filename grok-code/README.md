@@ -46,6 +46,7 @@ grok-code "task description"
 grok-code ask "question"
 grok-code edit "modify task"
 grok-code review
+grok-code learn-project
 grok-code status
 grok-code diff
 grok-code resume
@@ -110,6 +111,7 @@ Included tools:
 - `read_file_range`
 - `search_text`
 - `search_symbols`
+- `create_skill`
 - `apply_patch`
 - `run_shell`
 - `git_status`
@@ -140,6 +142,7 @@ Built-in general skills include:
 - shell usage
 - environment awareness
 - project-local setup
+- project understanding
 
 Project customization is supported through:
 
@@ -148,6 +151,10 @@ Project customization is supported through:
 - `.grok-code/config.json`
 
 Project skills cannot override core safety rules.
+
+The `create_skill` local tool can create project-local reusable skills in `.grok-code/skills/*.md`. Use it for stable project conventions, debugging workflows, review checklists, or domain-specific rules. Do not store secrets, transient logs, or one-off task notes as skills.
+
+Use `grok-code learn-project` to explicitly trigger the project-understanding skill. It inspects the current workspace through tools and creates or updates `GROK.md` with durable notes about project purpose, stack, structure, commands, conventions, risks, and unknowns. In interactive mode, use `/learn-project`.
 
 ## Context Manager and Compaction
 

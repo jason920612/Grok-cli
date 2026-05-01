@@ -6,6 +6,7 @@ import { startRepl } from "./ui/repl.js";
 import { printHeader } from "./ui/terminal.js";
 import { SessionStore } from "./session/SessionStore.js";
 import { colorDiff } from "./ui/diffView.js";
+import { PROJECT_UNDERSTANDING_TASK } from "./agent/projectUnderstandingTask.js";
 
 type CliOpts = {
   model?: string;
@@ -34,6 +35,7 @@ export async function main(): Promise<void> {
   program.command("ask <question...>").description("Ask a question").action(async (question: string[], opts: CliOpts) => runOne(question.join(" "), opts, "ask"));
   program.command("edit <task...>").description("Run an edit task").action(async (task: string[], opts: CliOpts) => runOne(task.join(" "), opts, "edit"));
   program.command("review").description("Review current diff").action(async (_opts: CliOpts) => runOne("Review the current git diff for bugs, regressions, risks, and missing tests.", program.opts<CliOpts>(), "review"));
+  program.command("learn-project").description("Inspect this project and write durable notes to GROK.md").action(async (_opts: CliOpts) => runOne(PROJECT_UNDERSTANDING_TASK, program.opts<CliOpts>(), "learn-project"));
   program.command("status").description("Show git status").action(async () => localStatus("status"));
   program.command("diff").description("Show git diff").action(async () => localStatus("diff"));
   program.command("resume [sessionId]").description("Resume a session").action(async (sessionId?: string) => runResume(sessionId, program.opts<CliOpts>()));

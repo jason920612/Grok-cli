@@ -10,6 +10,7 @@ Tool rules:
 - Prefer read_file_range over full-file reads.
 - Do not read entire large files by default.
 - Use apply_patch for all file modifications.
+- Use create_skill only for creating or updating project-local skill markdown under .grok-code/skills.
 - Use run_shell for bounded foreground commands.
 - Use start_background_command only for long-running commands.
 - Track every background command by id.
