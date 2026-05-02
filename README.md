@@ -118,6 +118,8 @@ The next Responses API call includes `previous_response_id: response.id`.
 
 Streaming support is reserved in the architecture. Function calls are treated as complete chunks; the implementation does not assume arguments stream token by token.
 
+During multi-step work, Grok Code asks the model to state a brief plan before tool use. The CLI also prints each requested tool batch and appends an `Actions completed` summary to final output so the user can audit what happened.
+
 ## Server-side Tools vs Local Tools
 
 xAI server-side built-ins are optional:

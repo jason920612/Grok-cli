@@ -11,6 +11,13 @@ import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import { buildModelInput } from "./modelInputBuilder.js";
 import { finalAnswerGate } from "./finalAnswerGate.js";
 
+type ToolActionSummary = {
+  step: number;
+  name: string;
+  ok: boolean;
+  summary: string;
+};
+
 export class AgentLoop {
   constructor(
     private readonly client: OpenAI,
@@ -27,6 +34,7 @@ export class AgentLoop {
     let previousResponseId: string | undefined;
     let finalText = "";
     const usedToolNames = new Set<string>();
+    const toolActionSummaries: ToolActionSummary[] = [];
     const hasModifiedFiles = { value: false };
     this.context.upsert("user-task", { type: "user_task", content: task, priority: 100, pinned: true });
 
@@ -64,6 +72,10 @@ export class AgentLoop {
         finalText = parsed.finalText;
         break;
       }
+      if (parsed.finalText) {
+        console.log(parsed.finalText);
+      }
+      console.log(formatToolBatch(step, parsed.functionCalls.map((call) => call.name)));
 
       const outputs = await Promise.all(parsed.functionCalls.map(async (call) => {
         throwIfAborted(signal);
@@ -79,6 +91,12 @@ export class AgentLoop {
         const result = await this.tools.execute(call.name, args, this.toolCtx);
         throwIfAborted(signal);
         if (call.name === "apply_patch" && result.ok) hasModifiedFiles.value = true;
+        toolActionSummaries.push({
+          step,
+          name: call.name,
+          ok: result.ok,
+          summary: summarizeToolResult(result)
+        });
         this.context.add({
           type: "shell_output",
           content: `tool ${call.name}(${call.arguments}) => ${JSON.stringify(result).slice(0, 4000)}`,
@@ -99,9 +117,26 @@ export class AgentLoop {
       hasModifiedFiles: hasModifiedFiles.value
     });
     const diffSection = gate.diffPreview ? `\n\n[Diff preview]\n${gate.diffPreview}` : "";
-    const suffix = `${diffSection}\n\n[Final checks]\nBackground: ${gate.backgroundStatus}\nDiff checked: ${gate.diffChecked ? "yes" : "not needed"}`;
+    const actionSection = toolActionSummaries.length > 0 ? `\n\n[Actions completed]\n${formatActionSummary(toolActionSummaries)}` : "";
+    const suffix = `${actionSection}${diffSection}\n\n[Final checks]\nBackground: ${gate.backgroundStatus}\nDiff checked: ${gate.diffChecked ? "yes" : "not needed"}`;
     return finalText ? `${finalText}${suffix}` : `Stopped after max steps without a final model message.${suffix}`;
   }
+}
+
+function formatToolBatch(step: number, toolNames: string[]): string {
+  const unique = [...new Set(toolNames)];
+  return `Grok requested tool batch ${step}: ${unique.join(", ")}`;
+}
+
+function summarizeToolResult(result: Awaited<ReturnType<ToolRegistry["execute"]>>): string {
+  if (!result.ok) return result.error.message;
+  return result.summary ?? JSON.stringify(result.data).slice(0, 240);
+}
+
+function formatActionSummary(actions: ToolActionSummary[]): string {
+  return actions
+    .map((action) => `- step ${action.step}: ${action.name} ${action.ok ? "ok" : "failed"} - ${action.summary}`)
+    .join("\n");
 }
 
 function throwIfAborted(signal?: AbortSignal): void {

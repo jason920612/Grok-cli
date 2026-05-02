@@ -8,6 +8,7 @@ import { buildModelInput } from "../dist/agent/modelInputBuilder.js";
 import { ToolSkillRegistry } from "../dist/tool-skills/ToolSkillRegistry.js";
 import { LOCAL_TOOL_NAMES, createLocalToolRegistry } from "../dist/tools/definitions/index.js";
 import { ApprovalPolicy } from "../dist/approval/ApprovalPolicy.js";
+import { CORE_SYSTEM_PROMPT } from "../dist/agent/prompts.js";
 
 const root = process.cwd();
 const skillPath = path.join(root, "src", "skills", "builtin", "tree-based-code-navigation.md");
@@ -79,4 +80,10 @@ test("approval policy supports local and all automation levels", async () => {
 
   const never = new ApprovalPolicy("never");
   assert.equal(await never.approvePatch("workspace patch"), false);
+});
+
+test("system prompt requires plans and final action summaries", () => {
+  assert.match(CORE_SYSTEM_PROMPT, /Before requesting tools, briefly tell the user/);
+  assert.match(CORE_SYSTEM_PROMPT, /Before the first tool call, provide a brief plan/);
+  assert.match(CORE_SYSTEM_PROMPT, /final answer must summarize the completed actions/);
 });
