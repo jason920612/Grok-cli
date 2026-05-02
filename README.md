@@ -235,10 +235,10 @@ Modes:
 - `on-request`: default. Auto-allow workspace file edits and safe local commands; ask for riskier commands.
 - `auto-local`: auto-allow operations scoped to the current workspace or local project environment; ask for global environment changes.
 - `auto-safe`: run safe local checks automatically; ask for network, install, unknown commands, and global changes.
-- `auto-all`: auto-allow every model-requested operation, including global or destructive commands.
+- `auto-all`: auto-allow model-requested operations without prompts, except commands that are hard-denied by the safety policy.
 - `never`: deny approval-required operations unless explicitly requested by the original task.
 
-Global environment changes are never auto-approved except in `auto-all`.
+Global environment changes are never auto-approved except in `auto-all`. Hard-denied commands, such as destructive deletes, shell install pipes, deploys, publishes, and git pushes, remain blocked in every mode.
 
 When approval is required, the prompt is a menu:
 
