@@ -143,7 +143,10 @@ function addRecent(items: string[], workspace: string): string[] {
 }
 
 function samePath(left: string, right: string): boolean {
-  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+  const resolvedLeft = path.resolve(left);
+  const resolvedRight = path.resolve(right);
+  if (process.platform === "win32") return resolvedLeft.toLowerCase() === resolvedRight.toLowerCase();
+  return resolvedLeft === resolvedRight;
 }
 
 function isInsideOrSame(child: string, parent: string): boolean {
