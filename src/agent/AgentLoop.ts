@@ -86,34 +86,7 @@ export class AgentLoop {
       }
       console.log(formatToolBatch(step, parsed.functionCalls.map((call) => call.name)));
 
-      const outputs = await Promise.all(parsed.functionCalls.map(async (call) => {
-        throwIfAborted(signal);
-        usedToolNames.add(call.name);
-        let args: unknown;
-        try {
-          args = JSON.parse(call.arguments || "{}");
-        } catch (error) {
-          args = {};
-          const result = { ok: false, error: { code: "json_parse_error", message: error instanceof Error ? error.message : String(error) } };
-          return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
-        }
-        const result = await this.tools.execute(call.name, args, this.toolCtx);
-        throwIfAborted(signal);
-        if (call.name === "apply_patch" && result.ok) hasModifiedFiles.value = true;
-        toolActionSummaries.push({
-          step,
-          name: call.name,
-          ok: result.ok,
-          summary: summarizeToolResult(result)
-        });
-        this.context.add({
-          type: "shell_output",
-          content: `tool ${call.name}(${call.arguments}) => ${JSON.stringify(result).slice(0, 4000)}`,
-          priority: 45,
-          expiresAfterSteps: 2
-        });
-        return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
-      }));
+      const outputs = await this.executeToolBatch(parsed.functionCalls, step, usedToolNames, toolActionSummaries, hasModifiedFiles, signal);
       pendingInput = outputs;
       step += 1;
     }
@@ -129,6 +102,67 @@ export class AgentLoop {
     const actionSection = toolActionSummaries.length > 0 ? `\n\n[Actions completed]\n${formatActionSummary(toolActionSummaries)}` : "";
     const suffix = `${actionSection}${diffSection}\n\n[Final checks]\nBackground: ${gate.backgroundStatus}\nDiff checked: ${gate.diffChecked ? "yes" : "not needed"}`;
     return finalText ? `${finalText}${suffix}` : `Stopped after max steps without a final model message.${suffix}`;
+  }
+
+  private async executeToolBatch(
+    functionCalls: Array<{ name: string; arguments?: string; call_id: string }>,
+    step: number,
+    usedToolNames: Set<string>,
+    toolActionSummaries: ToolActionSummary[],
+    hasModifiedFiles: { value: boolean },
+    signal?: AbortSignal
+  ): Promise<Array<{ type: "function_call_output"; call_id: string; output: string }>> {
+    const outputs: Array<{ type: "function_call_output"; call_id: string; output: string }> = [];
+    for (let index = 0; index < functionCalls.length;) {
+      const call = functionCalls[index];
+      if (this.tools.isReadOnly(call.name)) {
+        const readOnlyCalls = [];
+        while (index < functionCalls.length && this.tools.isReadOnly(functionCalls[index].name)) {
+          readOnlyCalls.push(functionCalls[index]);
+          index += 1;
+        }
+        outputs.push(...await Promise.all(readOnlyCalls.map((item) => this.executeOneToolCall(item, step, usedToolNames, toolActionSummaries, hasModifiedFiles, signal))));
+        continue;
+      }
+      outputs.push(await this.executeOneToolCall(call, step, usedToolNames, toolActionSummaries, hasModifiedFiles, signal));
+      index += 1;
+    }
+    return outputs;
+  }
+
+  private async executeOneToolCall(
+    call: { name: string; arguments?: string; call_id: string },
+    step: number,
+    usedToolNames: Set<string>,
+    toolActionSummaries: ToolActionSummary[],
+    hasModifiedFiles: { value: boolean },
+    signal?: AbortSignal
+  ): Promise<{ type: "function_call_output"; call_id: string; output: string }> {
+    throwIfAborted(signal);
+    usedToolNames.add(call.name);
+    let args: unknown;
+    try {
+      args = JSON.parse(call.arguments || "{}");
+    } catch (error) {
+      const result = { ok: false, error: { code: "json_parse_error", message: error instanceof Error ? error.message : String(error) } };
+      return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
+    }
+    const result = await this.tools.execute(call.name, args, this.toolCtx);
+    throwIfAborted(signal);
+    if (call.name === "apply_patch" && result.ok) hasModifiedFiles.value = true;
+    toolActionSummaries.push({
+      step,
+      name: call.name,
+      ok: result.ok,
+      summary: summarizeToolResult(result)
+    });
+    this.context.add({
+      type: "shell_output",
+      content: `tool ${call.name}(${call.arguments}) => ${JSON.stringify(result).slice(0, 4000)}`,
+      priority: 45,
+      expiresAfterSteps: 2
+    });
+    return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
   }
 }
 

@@ -68,6 +68,10 @@ test("tree search tools are registered and indexed", () => {
   assert.ok(names.includes("find_symbol"));
   assert.ok(names.includes("expand_node"));
   assert.ok(names.includes("get_related_files"));
+  assert.equal(tools.isReadOnly("search_code"), true);
+  assert.equal(tools.isReadOnly("git_diff"), true);
+  assert.equal(tools.isReadOnly("apply_patch"), false);
+  assert.equal(tools.isReadOnly("run_shell"), false);
   const index = toolSkills.toolIndex();
   assert.match(index, /search_code/);
   assert.match(index, /find_symbol/);
