@@ -11,7 +11,7 @@ import { ApprovalPolicy, classifyPatchRisk } from "../dist/approval/ApprovalPoli
 import { CORE_SYSTEM_PROMPT } from "../dist/agent/prompts.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { parseResponse } from "../dist/api/responseParser.js";
-import { parseMaxSteps } from "../dist/cli.js";
+import { parseMaxSteps, parseServerToolOverrides } from "../dist/cli.js";
 
 const root = process.cwd();
 const skillPath = path.join(root, "src", "skills", "builtin", "tree-based-code-navigation.md");
@@ -160,6 +160,24 @@ test("undefined CLI overrides do not disable default server-side search tools", 
   assert.equal(config.serverTools, true);
   assert.equal(config.enableWebSearch, true);
   assert.equal(config.enableXSearch, true);
+});
+
+test("negative server-side search flags map to explicit config overrides", () => {
+  assert.deepEqual(parseServerToolOverrides([]), {
+    serverTools: undefined,
+    enableWebSearch: undefined,
+    enableXSearch: undefined
+  });
+  assert.deepEqual(parseServerToolOverrides(["--no-web-search"]), {
+    serverTools: undefined,
+    enableWebSearch: false,
+    enableXSearch: undefined
+  });
+  assert.deepEqual(parseServerToolOverrides(["--no-server-tools", "--no-x-search"]), {
+    serverTools: false,
+    enableWebSearch: undefined,
+    enableXSearch: false
+  });
 });
 
 test("CLI max steps parser accepts only positive integers", () => {

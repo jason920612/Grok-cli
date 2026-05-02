@@ -60,8 +60,8 @@ Global flags:
 --tool-choice <auto|required|none>
 --max-steps <number>
 --no-server-tools
---enable-web-search
---enable-x-search
+--no-web-search
+--no-x-search
 ```
 
 ## Interactive Mode
@@ -126,8 +126,8 @@ xAI server-side built-ins are enabled by default:
 
 - `web_search` is included by default
 - `x_search` is included by default
-- `--enable-web-search` explicitly enables `{ type: "web_search" }`
-- `--enable-x-search` explicitly enables `{ type: "x_search" }`
+- `--no-web-search` disables `{ type: "web_search" }`
+- `--no-x-search` disables `{ type: "x_search" }`
 - `--no-server-tools` disables server-side tools
 
 Server-side tools are executed by xAI. Local filesystem, shell, git, patching, and background process tools are always custom local tools executed by this CLI.
