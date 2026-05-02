@@ -7,6 +7,12 @@ export type SlashCommand = {
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/help", usage: "/help", description: "Show available commands." },
   { name: "/status", usage: "/status", description: "Show session status." },
+  { name: "/cd", usage: "/cd", description: "Change workspace directory from a menu." },
+  { name: "/workspace", usage: "/workspace", description: "Change workspace directory from a menu." },
+  { name: "/change-dir", usage: "/change-dir", description: "Change workspace directory from a menu." },
+  { name: "/trust", usage: "/trust", description: "View or change workspace trust settings." },
+  { name: "/trust-settings", usage: "/trust-settings", description: "View or change workspace trust settings." },
+  { name: "/workspace-trust", usage: "/workspace-trust", description: "View or change workspace trust settings." },
   { name: "/git-status", usage: "/git-status", description: "Show git status." },
   { name: "/diff", usage: "/diff", description: "Show git-style diff for current changes." },
   { name: "/approval", usage: "/approval", description: "Choose approval mode from a menu." },

@@ -8,8 +8,14 @@ import { readInteractiveLine, runWithEscInterrupt } from "./interactiveInput.js"
 import { SLASH_COMMANDS } from "./slashCommands.js";
 import type { ApprovalMode } from "../config/loadConfig.js";
 import { formatSessionStatus } from "./terminal.js";
+import { chooseWorkspace, formatWorkspaceTrustStatus, manageWorkspaceTrust } from "./workspaceTrust.js";
 
-export async function startRepl(agent: Agent): Promise<void> {
+type ReplOptions = {
+  switchWorkspace?: (workspace: string) => Promise<Agent>;
+};
+
+export async function startRepl(initialAgent: Agent, options: ReplOptions = {}): Promise<Agent> {
+  let agent = initialAgent;
   console.log(chalk.dim("Type /help for commands, /exit to quit."));
   for (;;) {
     const line = await readInteractiveLine("grok-code>");
@@ -17,7 +23,8 @@ export async function startRepl(agent: Agent): Promise<void> {
     if (!text) continue;
     if (text === "/exit") break;
     if (text.startsWith("/")) {
-      await handleSlash(text, agent);
+      const nextAgent = await handleSlash(text, agent, options);
+      if (nextAgent) agent = nextAgent;
       continue;
     }
     try {
@@ -26,16 +33,39 @@ export async function startRepl(agent: Agent): Promise<void> {
       console.log(chalk.yellow(error instanceof Error ? error.message : String(error)));
     }
   }
+  return agent;
 }
 
-async function handleSlash(command: string, agent: Agent): Promise<void> {
+async function handleSlash(command: string, agent: Agent, options: ReplOptions): Promise<Agent | void> {
   const [name, ...rest] = command.split(/\s+/);
   switch (name) {
     case "/help":
       console.log(SLASH_COMMANDS.map((cmd) => `${cmd.usage.padEnd(24)} ${cmd.description}`).join("\n"));
       break;
     case "/status":
-      console.log(formatSessionStatus(agent.config));
+      console.log([formatSessionStatus(agent.config), formatWorkspaceTrustStatus(agent.config.workspaceRoot)].join("\n"));
+      break;
+    case "/cd":
+    case "/workspace":
+    case "/change-dir": {
+      if (!options.switchWorkspace) {
+        console.log("Workspace switching is unavailable in this session.");
+        break;
+      }
+      const workspace = await chooseWorkspace(agent.config.workspaceRoot);
+      if (!workspace) {
+        console.log("Workspace unchanged.");
+        break;
+      }
+      await agent.background.stopAll("workspace switch cleanup");
+      const nextAgent = await options.switchWorkspace(workspace);
+      console.log(`Workspace switched to ${nextAgent.config.workspaceRoot}`);
+      return nextAgent;
+    }
+    case "/trust":
+    case "/trust-settings":
+    case "/workspace-trust":
+      console.log(await manageWorkspaceTrust(agent.config.workspaceRoot));
       break;
     case "/git-status":
       console.log(JSON.stringify(await agent.tools.execute("git_status", {}, agent.toolContext()), null, 2));
