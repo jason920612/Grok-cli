@@ -26,16 +26,21 @@ export class WorkspaceSandbox {
     const abs = this.resolvePath(inputPath);
     const rel = this.relative(abs);
     if (isDeniedPath(rel)) throw new Error(`Path is denied by sandbox: ${rel}`);
-    const stat = fs.statSync(abs);
+    const realAbs = fs.realpathSync(abs);
+    if (!isInside(realAbs, this.root)) throw new Error(`Path escapes workspace: ${inputPath}`);
+    const realRel = this.relative(realAbs);
+    if (isDeniedPath(realRel)) throw new Error(`Path is denied by sandbox: ${realRel}`);
+    const stat = fs.statSync(realAbs);
     if (!stat.isFile()) throw new Error(`Not a file: ${rel}`);
-    if (looksBinary(abs)) throw new Error(`Binary file rejected: ${rel}`);
-    return abs;
+    if (looksBinary(realAbs)) throw new Error(`Binary file rejected: ${rel}`);
+    return realAbs;
   }
 
   assertWritablePatchPath(inputPath: string): string {
     const abs = this.resolvePath(inputPath);
     const rel = this.relative(abs);
     if (isDeniedPath(rel)) throw new Error(`Patch target denied by sandbox: ${rel}`);
+    assertNoSymlinkPathComponents(abs, this.root, inputPath);
     return abs;
   }
 }
@@ -62,4 +67,20 @@ export function looksBinary(absPath: string): boolean {
 function isInside(child: string, parent: string): boolean {
   const relative = path.relative(parent, child);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function assertNoSymlinkPathComponents(absPath: string, root: string, inputPath: string): void {
+  const relative = path.relative(root, absPath);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Path escapes workspace: ${inputPath}`);
+  }
+
+  let current = root;
+  for (const segment of relative.split(path.sep)) {
+    current = path.join(current, segment);
+    if (!fs.existsSync(current)) return;
+    if (fs.lstatSync(current).isSymbolicLink()) {
+      throw new Error(`Path contains symlink denied by sandbox: ${inputPath}`);
+    }
+  }
 }
