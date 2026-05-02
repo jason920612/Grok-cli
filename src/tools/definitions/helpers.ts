@@ -20,7 +20,8 @@ export function makeTool<T extends ZodTypeAny>(
     schema: { type: "function", name, description, parameters },
     execute: async (args, ctx) => execute(validator.parse(args), ctx),
     skill: skillRegistry.get(name),
-    locality: "local"
+    locality: "local",
+    readOnly: false
   };
 }
 

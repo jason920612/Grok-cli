@@ -19,6 +19,10 @@ export class ToolRegistry {
     return this.tools.has(name);
   }
 
+  isReadOnly(name: string): boolean {
+    return this.tools.get(name)?.readOnly ?? false;
+  }
+
   async execute(name: string, args: unknown, ctx: ToolExecutionContext): Promise<ToolResult> {
     const tool = this.tools.get(name);
     if (!tool) {

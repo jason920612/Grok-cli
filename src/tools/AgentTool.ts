@@ -29,6 +29,7 @@ export type AgentTool = {
   execute: ToolExecutor;
   skill: ToolSkill;
   locality: "local" | "server";
+  readOnly: boolean;
 };
 
 export type ToolResult =

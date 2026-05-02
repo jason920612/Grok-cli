@@ -46,6 +46,24 @@ export const LOCAL_TOOL_NAMES = [
   "stop_all_background_commands"
 ];
 
+const READ_ONLY_LOCAL_TOOL_NAMES = new Set([
+  "inspect_environment",
+  "check_project_tooling",
+  "list_files",
+  "get_file_overview",
+  "read_file_range",
+  "search_text",
+  "search_symbols",
+  "search_code",
+  "find_symbol",
+  "get_related_files",
+  "expand_node",
+  "git_status",
+  "git_diff",
+  "list_background_commands",
+  "read_background_output"
+]);
+
 export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry {
   const registry = new ToolRegistry();
   for (const tool of [
@@ -71,6 +89,7 @@ export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry
     stopBackgroundCommandTool(skills),
     stopAllBackgroundCommandsTool(skills)
   ]) {
+    tool.readOnly = READ_ONLY_LOCAL_TOOL_NAMES.has(tool.name);
     registry.register(tool);
   }
   return registry;
