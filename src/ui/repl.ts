@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { select } from "@inquirer/prompts";
 import type { Agent } from "../agent/Agent.js";
 import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
@@ -39,7 +40,7 @@ async function handleSlash(command: string, agent: Agent): Promise<void> {
       console.log(formatDiffResult(await agent.tools.execute("git_diff", {}, agent.toolContext())));
       break;
     case "/approval":
-      console.log(formatApproval(agent, rest[0]));
+      console.log(await chooseApproval(agent, rest[0]));
       break;
     case "/context":
       console.log(formatContext(agent.context.list()));
@@ -86,19 +87,27 @@ async function handleSlash(command: string, agent: Agent): Promise<void> {
   }
 }
 
-function formatApproval(agent: Agent, requestedMode?: string): string {
+async function chooseApproval(agent: Agent, requestedMode?: string): Promise<string> {
   const modes: ApprovalMode[] = ["on-request", "auto-local", "auto-safe", "auto-all", "never"];
-  if (!requestedMode) {
-    return [
-      `Current approval mode: ${agent.approval.mode}`,
-      "Available modes:",
-      ...modes.map((mode) => `- ${mode}: ${approvalDescription(mode)}`)
-    ].join("\n");
+  if (requestedMode) {
+    if (!modes.includes(requestedMode as ApprovalMode)) {
+      return `Unknown approval mode: ${requestedMode}\nUse one of: ${modes.join(", ")}`;
+    }
+    return setApproval(agent, requestedMode as ApprovalMode);
   }
-  if (!modes.includes(requestedMode as ApprovalMode)) {
-    return `Unknown approval mode: ${requestedMode}\nUse one of: ${modes.join(", ")}`;
-  }
-  const mode = requestedMode as ApprovalMode;
+
+  const mode = await select<ApprovalMode>({
+    message: `Approval mode (current: ${agent.approval.mode})`,
+    choices: modes.map((mode) => ({
+      name: `${mode} - ${approvalDescription(mode)}`,
+      value: mode
+    })),
+    default: agent.approval.mode
+  });
+  return setApproval(agent, mode);
+}
+
+function setApproval(agent: Agent, mode: ApprovalMode): string {
   agent.approval.setMode(mode);
   agent.config.approval = mode;
   return `Approval mode set to ${mode}: ${approvalDescription(mode)}`;
