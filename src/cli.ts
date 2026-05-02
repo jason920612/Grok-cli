@@ -55,7 +55,7 @@ async function makeAgent(opts: CliOpts, task = ""): Promise<Agent> {
     model: opts.model,
     approval: opts.approval,
     toolChoice: opts.toolChoice,
-    maxSteps: opts.maxSteps ? Number(opts.maxSteps) : undefined,
+    maxSteps: parseMaxSteps(opts.maxSteps),
     serverTools: toolOverrides.serverTools,
     enableWebSearch: toolOverrides.enableWebSearch,
     enableXSearch: toolOverrides.enableXSearch
@@ -79,6 +79,16 @@ export function parseServerToolOverrides(argv: string[]): { serverTools?: boolea
   };
 }
 
+export function parseMaxSteps(value?: string): number | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  const parsed = Number(normalized);
+  if (!/^\d+$/.test(normalized) || !Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error("--max-steps must be a positive integer");
+  }
+  return parsed;
+}
+
 async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void> {
   const agent = await makeAgent(opts, task);
   const answer = await agent.run(task, true);
@@ -86,6 +96,7 @@ async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void>
   await agent.background.stopAll("one-shot exit cleanup");
   const store = new SessionStore(process.cwd());
   const session = store.create(agent.config.model, opts.approval ?? "on-request");
+  session.taskSummary = task;
   session.contextItems = agent.context.list();
   session.backgroundProcesses = agent.background.list();
   store.save(session);

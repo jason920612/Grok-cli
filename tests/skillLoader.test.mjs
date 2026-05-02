@@ -7,11 +7,11 @@ import { ContextManager } from "../dist/context/ContextManager.js";
 import { buildModelInput } from "../dist/agent/modelInputBuilder.js";
 import { ToolSkillRegistry } from "../dist/tool-skills/ToolSkillRegistry.js";
 import { LOCAL_TOOL_NAMES, createLocalToolRegistry } from "../dist/tools/definitions/index.js";
-import { ApprovalPolicy } from "../dist/approval/ApprovalPolicy.js";
+import { ApprovalPolicy, classifyPatchRisk } from "../dist/approval/ApprovalPolicy.js";
 import { CORE_SYSTEM_PROMPT } from "../dist/agent/prompts.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { parseResponse } from "../dist/api/responseParser.js";
-import { parseServerToolOverrides } from "../dist/cli.js";
+import { parseMaxSteps, parseServerToolOverrides } from "../dist/cli.js";
 
 const root = process.cwd();
 const skillPath = path.join(root, "src", "skills", "builtin", "tree-based-code-navigation.md");
@@ -69,6 +69,10 @@ test("tree search tools are registered and indexed", () => {
   assert.ok(names.includes("find_symbol"));
   assert.ok(names.includes("expand_node"));
   assert.ok(names.includes("get_related_files"));
+  assert.equal(tools.isReadOnly("search_code"), true);
+  assert.equal(tools.isReadOnly("git_diff"), true);
+  assert.equal(tools.isReadOnly("apply_patch"), false);
+  assert.equal(tools.isReadOnly("run_shell"), false);
   const index = toolSkills.toolIndex();
   assert.match(index, /search_code/);
   assert.match(index, /find_symbol/);
@@ -90,6 +94,25 @@ test("approval policy supports local and all automation levels", async () => {
 
   const never = new ApprovalPolicy("never");
   assert.equal(await never.approvePatch("workspace patch"), false);
+});
+
+test("patch approval classifies higher-risk patch metadata", async () => {
+  const safePatch = { files: [{ path: "src/example.ts", operation: "modify", additions: 3, deletions: 1 }] };
+  const packagePatch = { files: [{ path: "package.json", operation: "modify", additions: 1, deletions: 1 }] };
+  const deletePatch = { files: [{ path: "src/old.ts", operation: "delete", additions: 0, deletions: 20 }] };
+  const largeDeletionPatch = { files: [{ path: "src/big.ts", operation: "modify", additions: 0, deletions: 101 }] };
+
+  assert.equal(classifyPatchRisk(safePatch), "safe");
+  assert.equal(classifyPatchRisk(packagePatch), "ask");
+  assert.equal(classifyPatchRisk(deletePatch), "ask");
+  assert.equal(classifyPatchRisk(largeDeletionPatch), "ask");
+
+  const autoSafe = new ApprovalPolicy("auto-safe");
+  assert.equal(await autoSafe.approvePatch("safe patch", safePatch), true);
+  assert.equal(await autoSafe.approvePatch("package patch", packagePatch), false);
+
+  const autoLocal = new ApprovalPolicy("auto-local");
+  assert.equal(await autoLocal.approvePatch("package patch", packagePatch), true);
 });
 
 test("system prompt requires plans and final action summaries", () => {
@@ -155,4 +178,14 @@ test("negative server-side search flags map to explicit config overrides", () =>
     enableWebSearch: undefined,
     enableXSearch: false
   });
+});
+
+test("CLI max steps parser accepts only positive integers", () => {
+  assert.equal(parseMaxSteps(undefined), undefined);
+  assert.equal(parseMaxSteps("1"), 1);
+  assert.equal(parseMaxSteps("30"), 30);
+  assert.throws(() => parseMaxSteps("0"), /--max-steps must be a positive integer/);
+  assert.throws(() => parseMaxSteps("-1"), /--max-steps must be a positive integer/);
+  assert.throws(() => parseMaxSteps("1.5"), /--max-steps must be a positive integer/);
+  assert.throws(() => parseMaxSteps("abc"), /--max-steps must be a positive integer/);
 });
