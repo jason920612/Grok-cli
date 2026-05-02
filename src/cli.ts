@@ -19,6 +19,8 @@ type CliOpts = {
   xSearch?: boolean;
 };
 
+let activeSigintCleanup: (() => void) | undefined;
+
 export async function main(): Promise<void> {
   const program = new Command();
   program
@@ -66,10 +68,16 @@ async function makeAgent(opts: CliOpts, task = "", cwd = process.cwd()): Promise
   const agent = new Agent(client, config, task);
   printHeader(config.model, config.workspaceRoot);
   await agent.bootstrap();
-  process.once("SIGINT", async () => {
+  activeSigintCleanup?.();
+  const sigintHandler = async () => {
     await agent.background.stopAll("Ctrl+C cleanup");
     process.exit(130);
-  });
+  };
+  process.once("SIGINT", sigintHandler);
+  activeSigintCleanup = () => {
+    process.removeListener("SIGINT", sigintHandler);
+    activeSigintCleanup = undefined;
+  };
   return agent;
 }
 

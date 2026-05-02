@@ -39,6 +39,16 @@ test("clearing trust removes the remembered entry for that workspace", () => {
   assert.equal(store.clearTrust(root), false);
 });
 
+test("clearing a matched trust entry removes inherited trust", () => {
+  const { store, root, child } = makeStore();
+  store.setTrust(root, "descendants");
+  const inherited = store.getTrustFor(child);
+
+  assert.equal(inherited?.scope, "descendants");
+  assert.equal(store.clearTrustEntry(inherited), true);
+  assert.equal(store.getTrustFor(child), undefined);
+});
+
 function makeStore() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "grok-trust-"));
   const root = path.join(base, "project");
