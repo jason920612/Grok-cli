@@ -18,14 +18,14 @@ export class ApprovalPolicy {
   async approveCommand(command: string, reason: string, options: { background?: boolean } = {}): Promise<{ approved: boolean; risk: CommandRisk; message?: string }> {
     const risk = classifyCommand(command, options.background ?? false);
     const key = approvalKey(command, risk, options.background ?? false);
+    if (risk === "deny" || risk === "destructive") {
+      return { approved: false, risk, message: "Command is denied by safety policy." };
+    }
     if (this.rememberedApprovals.has(key)) {
       return { approved: true, risk };
     }
     if (this.currentMode === "auto-all") {
       return { approved: true, risk };
-    }
-    if (risk === "deny" || risk === "destructive") {
-      return { approved: false, risk, message: "Command is denied by safety policy." };
     }
     if (this.currentMode === "auto-local" && risk !== "global_environment_change") {
       return { approved: true, risk };
