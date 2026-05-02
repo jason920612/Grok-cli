@@ -6,7 +6,8 @@ export type SlashCommand = {
 
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/help", usage: "/help", description: "Show available commands." },
-  { name: "/status", usage: "/status", description: "Show git status." },
+  { name: "/status", usage: "/status", description: "Show session status." },
+  { name: "/git-status", usage: "/git-status", description: "Show git status." },
   { name: "/diff", usage: "/diff", description: "Show git-style diff for current changes." },
   { name: "/approval", usage: "/approval", description: "Choose approval mode from a menu." },
   { name: "/model", usage: "/model <model>", description: "Show model change guidance." },

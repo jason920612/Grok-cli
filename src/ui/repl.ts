@@ -7,6 +7,7 @@ import { colorDiff } from "./diffView.js";
 import { readInteractiveLine, runWithEscInterrupt } from "./interactiveInput.js";
 import { SLASH_COMMANDS } from "./slashCommands.js";
 import type { ApprovalMode } from "../config/loadConfig.js";
+import { formatSessionStatus } from "./terminal.js";
 
 export async function startRepl(agent: Agent): Promise<void> {
   console.log(chalk.dim("Type /help for commands, /exit to quit."));
@@ -34,6 +35,9 @@ async function handleSlash(command: string, agent: Agent): Promise<void> {
       console.log(SLASH_COMMANDS.map((cmd) => `${cmd.usage.padEnd(24)} ${cmd.description}`).join("\n"));
       break;
     case "/status":
+      console.log(formatSessionStatus(agent.config));
+      break;
+    case "/git-status":
       console.log(JSON.stringify(await agent.tools.execute("git_status", {}, agent.toolContext()), null, 2));
       break;
     case "/diff":

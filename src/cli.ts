@@ -3,7 +3,7 @@ import { createXaiClient } from "./api/xaiClient.js";
 import { Agent } from "./agent/Agent.js";
 import { loadConfig, type ApprovalMode, type ToolChoice } from "./config/loadConfig.js";
 import { startRepl } from "./ui/repl.js";
-import { printHeader } from "./ui/terminal.js";
+import { formatSessionStatus, printHeader } from "./ui/terminal.js";
 import { SessionStore } from "./session/SessionStore.js";
 import { colorDiff } from "./ui/diffView.js";
 import { PROJECT_UNDERSTANDING_TASK } from "./agent/projectUnderstandingTask.js";
@@ -36,7 +36,8 @@ export async function main(): Promise<void> {
   program.command("edit <task...>").description("Run an edit task").action(async (task: string[]) => runOne(task.join(" "), program.opts<CliOpts>(), "edit"));
   program.command("review").description("Review current diff").action(async (_opts: CliOpts) => runOne("Review the current git diff for bugs, regressions, risks, and missing tests.", program.opts<CliOpts>(), "review"));
   program.command("learn-project").description("Inspect this project and write durable notes to GROK.md").action(async (_opts: CliOpts) => runOne(PROJECT_UNDERSTANDING_TASK, program.opts<CliOpts>(), "learn-project"));
-  program.command("status").description("Show git status").action(async () => localStatus("status"));
+  program.command("status").description("Show session status").action(() => localSessionStatus(program.opts<CliOpts>()));
+  program.command("git-status").description("Show git status").action(async () => localGitStatus());
   program.command("diff").description("Show git diff").action(async () => localStatus("diff"));
   program.command("resume [sessionId]").description("Resume a session").action(async (sessionId?: string) => runResume(sessionId, program.opts<CliOpts>()));
 
@@ -115,6 +116,27 @@ async function runResume(sessionId: string | undefined, opts: CliOpts): Promise<
   const agent = await makeAgent({ ...opts, model: session.model, approval: session.approval }, session.taskSummary ?? "resume session");
   for (const item of session.contextItems) agent.context.add(item);
   await startRepl(agent);
+}
+
+function localSessionStatus(opts: CliOpts): void {
+  const toolOverrides = parseServerToolOverrides(process.argv.slice(2));
+  const config = loadConfig(process.cwd(), {
+    model: opts.model,
+    approval: opts.approval,
+    toolChoice: opts.toolChoice,
+    maxSteps: parseMaxSteps(opts.maxSteps),
+    serverTools: toolOverrides.serverTools,
+    enableWebSearch: toolOverrides.enableWebSearch,
+    enableXSearch: toolOverrides.enableXSearch
+  });
+  console.log(formatSessionStatus(config));
+}
+
+async function localGitStatus(): Promise<void> {
+  const config = loadConfig(process.cwd(), {});
+  const agent = new Agent({} as any, config, "git-status");
+  const result = await agent.tools.execute("git_status", {}, agent.toolContext());
+  console.log(JSON.stringify(result, null, 2));
 }
 
 async function localStatus(kind: "status" | "diff"): Promise<void> {
