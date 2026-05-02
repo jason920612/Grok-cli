@@ -14,8 +14,8 @@ type CliOpts = {
   toolChoice?: ToolChoice;
   maxSteps?: string;
   serverTools?: boolean;
-  enableWebSearch?: boolean;
-  enableXSearch?: boolean;
+  webSearch?: boolean;
+  xSearch?: boolean;
 };
 
 export async function main(): Promise<void> {
@@ -29,8 +29,8 @@ export async function main(): Promise<void> {
     .option("--tool-choice <choice>", "auto|required|none", "auto")
     .option("--max-steps <number>", "Maximum agent steps", "30")
     .option("--no-server-tools", "Disable xAI server-side tools")
-    .option("--enable-web-search", "Enable xAI web_search server-side tool")
-    .option("--enable-x-search", "Enable xAI x_search server-side tool");
+    .option("--no-web-search", "Disable xAI web_search server-side tool")
+    .option("--no-x-search", "Disable xAI x_search server-side tool");
 
   program.command("ask <question...>").description("Ask a question").action(async (question: string[], opts: CliOpts) => runOne(question.join(" "), opts, "ask"));
   program.command("edit <task...>").description("Run an edit task").action(async (task: string[], opts: CliOpts) => runOne(task.join(" "), opts, "edit"));
@@ -50,14 +50,15 @@ export async function main(): Promise<void> {
 }
 
 async function makeAgent(opts: CliOpts, task = ""): Promise<Agent> {
+  const toolOverrides = parseServerToolOverrides(process.argv.slice(2));
   const config = loadConfig(process.cwd(), {
     model: opts.model,
     approval: opts.approval,
     toolChoice: opts.toolChoice,
     maxSteps: opts.maxSteps ? Number(opts.maxSteps) : undefined,
-    serverTools: opts.serverTools,
-    enableWebSearch: opts.enableWebSearch,
-    enableXSearch: opts.enableXSearch
+    serverTools: toolOverrides.serverTools,
+    enableWebSearch: toolOverrides.enableWebSearch,
+    enableXSearch: toolOverrides.enableXSearch
   });
   const client = createXaiClient();
   const agent = new Agent(client, config, task);
@@ -68,6 +69,14 @@ async function makeAgent(opts: CliOpts, task = ""): Promise<Agent> {
     process.exit(130);
   });
   return agent;
+}
+
+export function parseServerToolOverrides(argv: string[]): { serverTools?: boolean; enableWebSearch?: boolean; enableXSearch?: boolean } {
+  return {
+    serverTools: argv.includes("--no-server-tools") ? false : undefined,
+    enableWebSearch: argv.includes("--no-web-search") ? false : undefined,
+    enableXSearch: argv.includes("--no-x-search") ? false : undefined
+  };
 }
 
 async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void> {
