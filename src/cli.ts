@@ -25,7 +25,7 @@ export async function main(): Promise<void> {
     .description("Local coding agent CLI powered by xAI Grok 4.3")
     .argument("[task...]", "Task description")
     .option("--model <model>", "Model", "grok-4.3")
-    .option("--approval <mode>", "on-request|auto-safe|never", "on-request")
+    .option("--approval <mode>", "on-request|auto-local|auto-safe|auto-all|never", "on-request")
     .option("--tool-choice <choice>", "auto|required|none", "auto")
     .option("--max-steps <number>", "Maximum agent steps", "30")
     .option("--no-server-tools", "Disable xAI server-side tools")

@@ -5,6 +5,7 @@ import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js
 import { colorDiff } from "./diffView.js";
 import { readInteractiveLine, runWithEscInterrupt } from "./interactiveInput.js";
 import { SLASH_COMMANDS } from "./slashCommands.js";
+import type { ApprovalMode } from "../config/loadConfig.js";
 
 export async function startRepl(agent: Agent): Promise<void> {
   console.log(chalk.dim("Type /help for commands, /exit to quit."));
@@ -36,6 +37,9 @@ async function handleSlash(command: string, agent: Agent): Promise<void> {
       break;
     case "/diff":
       console.log(formatDiffResult(await agent.tools.execute("git_diff", {}, agent.toolContext())));
+      break;
+    case "/approval":
+      console.log(formatApproval(agent, rest[0]));
       break;
     case "/context":
       console.log(formatContext(agent.context.list()));
@@ -80,6 +84,34 @@ async function handleSlash(command: string, agent: Agent): Promise<void> {
     default:
       console.log(`Unknown command: ${name}`);
   }
+}
+
+function formatApproval(agent: Agent, requestedMode?: string): string {
+  const modes: ApprovalMode[] = ["on-request", "auto-local", "auto-safe", "auto-all", "never"];
+  if (!requestedMode) {
+    return [
+      `Current approval mode: ${agent.approval.mode}`,
+      "Available modes:",
+      ...modes.map((mode) => `- ${mode}: ${approvalDescription(mode)}`)
+    ].join("\n");
+  }
+  if (!modes.includes(requestedMode as ApprovalMode)) {
+    return `Unknown approval mode: ${requestedMode}\nUse one of: ${modes.join(", ")}`;
+  }
+  const mode = requestedMode as ApprovalMode;
+  agent.approval.setMode(mode);
+  agent.config.approval = mode;
+  return `Approval mode set to ${mode}: ${approvalDescription(mode)}`;
+}
+
+function approvalDescription(mode: ApprovalMode): string {
+  return {
+    "on-request": "Default. Auto-allow workspace file edits and safe local commands; ask for riskier commands.",
+    "auto-local": "Auto-allow operations scoped to this workspace/local environment; still asks for global environment changes.",
+    "auto-safe": "Auto-allow only safe commands and local patch edits; ask for network/install/unknown commands.",
+    "auto-all": "Auto-allow every model-requested operation, including global or destructive commands.",
+    never: "Deny approval-required operations."
+  }[mode];
 }
 
 function formatSkills(agent: Agent): string {

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
 
-export type ApprovalMode = "on-request" | "auto-safe" | "never";
+export type ApprovalMode = "on-request" | "auto-local" | "auto-safe" | "auto-all" | "never";
 export type ToolChoice = "auto" | "required" | "none";
 
 export type GrokCodeConfig = {

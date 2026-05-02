@@ -7,6 +7,7 @@ import { ContextManager } from "../dist/context/ContextManager.js";
 import { buildModelInput } from "../dist/agent/modelInputBuilder.js";
 import { ToolSkillRegistry } from "../dist/tool-skills/ToolSkillRegistry.js";
 import { LOCAL_TOOL_NAMES, createLocalToolRegistry } from "../dist/tools/definitions/index.js";
+import { ApprovalPolicy } from "../dist/approval/ApprovalPolicy.js";
 
 const root = process.cwd();
 const skillPath = path.join(root, "src", "skills", "builtin", "tree-based-code-navigation.md");
@@ -63,4 +64,19 @@ test("tree search tools are registered and indexed", () => {
   assert.match(index, /find_symbol/);
   assert.match(index, /expand_node/);
   assert.match(index, /get_related_files/);
+});
+
+test("approval policy supports local and all automation levels", async () => {
+  const onRequest = new ApprovalPolicy("on-request");
+  assert.equal((await onRequest.approveCommand("git status --short", "inspect")).approved, true);
+  assert.equal(await onRequest.approvePatch("workspace patch"), true);
+
+  const autoLocal = new ApprovalPolicy("auto-local");
+  assert.equal((await autoLocal.approveCommand("npm install", "install local dependencies")).approved, true);
+
+  const autoAll = new ApprovalPolicy("auto-all");
+  assert.equal((await autoAll.approveCommand("git push origin main", "push")).approved, true);
+
+  const never = new ApprovalPolicy("never");
+  assert.equal(await never.approvePatch("workspace patch"), false);
 });

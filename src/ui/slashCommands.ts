@@ -8,6 +8,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/help", usage: "/help", description: "Show available commands." },
   { name: "/status", usage: "/status", description: "Show git status." },
   { name: "/diff", usage: "/diff", description: "Show git-style diff for current changes." },
+  { name: "/approval", usage: "/approval <mode>", description: "Show or set approval mode." },
   { name: "/model", usage: "/model <model>", description: "Show model change guidance." },
   { name: "/clear", usage: "/clear", description: "Compact and clear stale context." },
   { name: "/resume", usage: "/resume", description: "Show resume guidance." },

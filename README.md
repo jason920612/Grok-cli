@@ -56,7 +56,7 @@ Global flags:
 
 ```bash
 --model <model>
---approval <on-request|auto-safe|never>
+--approval <on-request|auto-local|auto-safe|auto-all|never>
 --tool-choice <auto|required|none>
 --max-steps <number>
 --no-server-tools
@@ -74,6 +74,7 @@ Run `grok-code` with no task to enter interactive mode.
 - Press Esc while editing the prompt to cancel the command menu and clear the current input.
 - Press Esc while a model request is running to interrupt the current request.
 - `/skills` shows skills loaded for the current interactive baseline separately from skills that are available and loaded only when triggered.
+- `/approval <mode>` changes approval mode during interactive sessions.
 
 Useful slash commands:
 
@@ -81,6 +82,7 @@ Useful slash commands:
 /help
 /status
 /diff
+/approval <mode>
 /learn-project
 /context
 /compact
@@ -223,11 +225,21 @@ One-shot mode cleans up agent-started background commands before final output un
 
 Modes:
 
-- `on-request`: ask for risky operations.
-- `auto-safe`: run safe local checks automatically; ask for network, install, and global changes.
+- `on-request`: default. Auto-allow workspace file edits and safe local commands; ask for riskier commands.
+- `auto-local`: auto-allow operations scoped to the current workspace or local project environment; ask for global environment changes.
+- `auto-safe`: run safe local checks automatically; ask for network, install, unknown commands, and global changes.
+- `auto-all`: auto-allow every model-requested operation, including global or destructive commands.
 - `never`: deny approval-required operations unless explicitly requested by the original task.
 
-Global environment changes are never auto-approved.
+Global environment changes are never auto-approved except in `auto-all`.
+
+When approval is required, the prompt is a menu:
+
+- allow this time
+- allow and remember similar requests for this session
+- no, use another approach
+
+If you deny and choose another approach, Grok Code asks for guidance and returns that guidance to the model.
 
 ## Sandbox Limitations
 
