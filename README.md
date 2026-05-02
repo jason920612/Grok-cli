@@ -74,6 +74,8 @@ Run `grok-code` with no task to enter interactive mode.
 - Press Enter to accept and run the highlighted command.
 - Press Esc while editing the prompt to cancel the command menu and clear the current input.
 - Press Esc while a model request is running to interrupt the current request.
+- `/cd`, `/workspace`, and `/change-dir` switch the active workspace through a menu.
+- `/trust`, `/trust-settings`, and `/workspace-trust` view, change, or clear remembered workspace trust settings.
 - `/skills` shows skills loaded for the current interactive baseline separately from skills that are available and loaded only when triggered.
 - `/approval <mode>` changes approval mode during interactive sessions.
 
@@ -82,6 +84,8 @@ Useful slash commands:
 ```txt
 /help
 /status
+/cd
+/trust
 /git-status
 /diff
 /approval <mode>

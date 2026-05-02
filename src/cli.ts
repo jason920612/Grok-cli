@@ -7,6 +7,7 @@ import { formatSessionStatus, printHeader } from "./ui/terminal.js";
 import { SessionStore } from "./session/SessionStore.js";
 import { colorDiff } from "./ui/diffView.js";
 import { PROJECT_UNDERSTANDING_TASK } from "./agent/projectUnderstandingTask.js";
+import { ensureWorkspaceTrusted } from "./ui/workspaceTrust.js";
 
 type CliOpts = {
   model?: string;
@@ -50,9 +51,9 @@ export async function main(): Promise<void> {
   await program.parseAsync(process.argv);
 }
 
-async function makeAgent(opts: CliOpts, task = ""): Promise<Agent> {
+async function makeAgent(opts: CliOpts, task = "", cwd = process.cwd()): Promise<Agent> {
   const toolOverrides = parseServerToolOverrides(process.argv.slice(2));
-  const config = loadConfig(process.cwd(), {
+  const config = loadConfig(cwd, {
     model: opts.model,
     approval: opts.approval,
     toolChoice: opts.toolChoice,
@@ -104,18 +105,33 @@ async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void>
 }
 
 async function runInteractive(opts: CliOpts): Promise<void> {
+  if (!(await ensureWorkspaceTrusted(process.cwd()))) return;
   const agent = await makeAgent(opts, "interactive session");
-  await startRepl(agent);
-  await agent.background.stopAll("interactive exit cleanup");
+  const finalAgent = await startRepl(agent, {
+    switchWorkspace: async (workspace) => {
+      const next = await makeAgent(opts, "interactive session", workspace);
+      process.chdir(workspace);
+      return next;
+    }
+  });
+  await finalAgent.background.stopAll("interactive exit cleanup");
 }
 
 async function runResume(sessionId: string | undefined, opts: CliOpts): Promise<void> {
+  if (!(await ensureWorkspaceTrusted(process.cwd()))) return;
   const store = new SessionStore(process.cwd());
   const session = store.load(sessionId);
   if (!session) throw new Error("No session found.");
   const agent = await makeAgent({ ...opts, model: session.model, approval: session.approval }, session.taskSummary ?? "resume session");
   for (const item of session.contextItems) agent.context.add(item);
-  await startRepl(agent);
+  const finalAgent = await startRepl(agent, {
+    switchWorkspace: async (workspace) => {
+      const next = await makeAgent({ ...opts, model: session.model, approval: session.approval }, "interactive session", workspace);
+      process.chdir(workspace);
+      return next;
+    }
+  });
+  await finalAgent.background.stopAll("resume exit cleanup");
 }
 
 function localSessionStatus(opts: CliOpts): void {
