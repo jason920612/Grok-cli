@@ -20,6 +20,21 @@ test("readable files must resolve inside the workspace", (t) => {
   assert.throws(() => sandbox.assertReadableFile("secret-link.txt"), /escapes workspace/);
 });
 
+test("readable symlinks cannot bypass denied workspace paths", (t) => {
+  const { root } = makeWorkspace();
+  const envPath = path.join(root, ".env");
+  fs.writeFileSync(envPath, "SECRET=value");
+
+  const linkPath = path.join(root, "safe-link.txt");
+  if (!trySymlink(envPath, linkPath, "file")) {
+    t.skip("file symlinks are not available in this environment");
+    return;
+  }
+
+  const sandbox = new WorkspaceSandbox(root);
+  assert.throws(() => sandbox.assertReadableFile("safe-link.txt"), /Path is denied by sandbox: \.env/);
+});
+
 test("writable patch paths reject symlink path components", (t) => {
   const { root, outside } = makeWorkspace();
   const linkPath = path.join(root, "linked-dir");

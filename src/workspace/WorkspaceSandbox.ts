@@ -28,6 +28,8 @@ export class WorkspaceSandbox {
     if (isDeniedPath(rel)) throw new Error(`Path is denied by sandbox: ${rel}`);
     const realAbs = fs.realpathSync(abs);
     if (!isInside(realAbs, this.root)) throw new Error(`Path escapes workspace: ${inputPath}`);
+    const realRel = this.relative(realAbs);
+    if (isDeniedPath(realRel)) throw new Error(`Path is denied by sandbox: ${realRel}`);
     const stat = fs.statSync(realAbs);
     if (!stat.isFile()) throw new Error(`Not a file: ${rel}`);
     if (looksBinary(realAbs)) throw new Error(`Binary file rejected: ${rel}`);
