@@ -54,7 +54,7 @@ async function makeAgent(opts: CliOpts, task = ""): Promise<Agent> {
     model: opts.model,
     approval: opts.approval,
     toolChoice: opts.toolChoice,
-    maxSteps: opts.maxSteps ? Number(opts.maxSteps) : undefined,
+    maxSteps: parseMaxSteps(opts.maxSteps),
     serverTools: opts.serverTools,
     enableWebSearch: opts.enableWebSearch,
     enableXSearch: opts.enableXSearch
@@ -68,6 +68,16 @@ async function makeAgent(opts: CliOpts, task = ""): Promise<Agent> {
     process.exit(130);
   });
   return agent;
+}
+
+export function parseMaxSteps(value?: string): number | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim();
+  const parsed = Number(normalized);
+  if (!/^\d+$/.test(normalized) || !Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error("--max-steps must be a positive integer");
+  }
+  return parsed;
 }
 
 async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void> {

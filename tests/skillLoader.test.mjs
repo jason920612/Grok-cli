@@ -11,6 +11,7 @@ import { ApprovalPolicy } from "../dist/approval/ApprovalPolicy.js";
 import { CORE_SYSTEM_PROMPT } from "../dist/agent/prompts.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { parseResponse } from "../dist/api/responseParser.js";
+import { parseMaxSteps } from "../dist/cli.js";
 
 const root = process.cwd();
 const skillPath = path.join(root, "src", "skills", "builtin", "tree-based-code-navigation.md");
@@ -136,4 +137,14 @@ test("undefined CLI overrides do not disable default server-side search tools", 
   assert.equal(config.serverTools, true);
   assert.equal(config.enableWebSearch, true);
   assert.equal(config.enableXSearch, true);
+});
+
+test("CLI max steps parser accepts only positive integers", () => {
+  assert.equal(parseMaxSteps(undefined), undefined);
+  assert.equal(parseMaxSteps("1"), 1);
+  assert.equal(parseMaxSteps("30"), 30);
+  assert.throws(() => parseMaxSteps("0"), /--max-steps must be a positive integer/);
+  assert.throws(() => parseMaxSteps("-1"), /--max-steps must be a positive integer/);
+  assert.throws(() => parseMaxSteps("1.5"), /--max-steps must be a positive integer/);
+  assert.throws(() => parseMaxSteps("abc"), /--max-steps must be a positive integer/);
 });
