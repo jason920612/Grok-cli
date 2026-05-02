@@ -19,6 +19,7 @@ export type GrokCodeConfig = {
 export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfig> = {}): GrokCodeConfig {
   dotenv.config({ path: path.join(cwd, ".env"), override: true });
   const projectConfig = readProjectConfig(cwd);
+  const cleanOverrides = withoutUndefined(overrides);
   return {
     model: "grok-4.3",
     approval: "on-request",
@@ -29,8 +30,12 @@ export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfi
     enableXSearch: true,
     workspaceRoot: cwd,
     ...projectConfig,
-    ...overrides
+    ...cleanOverrides
   };
+}
+
+function withoutUndefined<T extends object>(value: T): Partial<T> {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as Partial<T>;
 }
 
 function readProjectConfig(cwd: string): Partial<GrokCodeConfig> {

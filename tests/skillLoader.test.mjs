@@ -95,3 +95,14 @@ test("xAI server-side search tools are enabled by default", () => {
   assert.equal(config.enableWebSearch, true);
   assert.equal(config.enableXSearch, true);
 });
+
+test("undefined CLI overrides do not disable default server-side search tools", () => {
+  const config = loadConfig(root, {
+    serverTools: undefined,
+    enableWebSearch: undefined,
+    enableXSearch: undefined
+  });
+  assert.equal(config.serverTools, true);
+  assert.equal(config.enableWebSearch, true);
+  assert.equal(config.enableXSearch, true);
+});
