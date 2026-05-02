@@ -8,7 +8,6 @@ API base URL: `https://api.x.ai/v1`
 ## Setup
 
 ```bash
-cd grok-code
 npm install
 cp .env.example .env
 ```
