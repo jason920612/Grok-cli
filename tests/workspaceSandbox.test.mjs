@@ -47,6 +47,13 @@ test("writable patch paths reject symlink path components", (t) => {
   assert.throws(() => sandbox.assertWritablePatchPath("linked-dir/new-file.txt"), /symlink denied|escapes workspace/);
 });
 
+test("writable patch paths allow new directories inside the workspace", () => {
+  const { root } = makeWorkspace();
+  const sandbox = new WorkspaceSandbox(root);
+  const abs = sandbox.assertWritablePatchPath("new-dir/nested/file.ts");
+  assert.equal(abs, path.join(root, "new-dir", "nested", "file.ts"));
+});
+
 function makeWorkspace() {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "grok-sandbox-"));
   const root = path.join(base, "workspace");

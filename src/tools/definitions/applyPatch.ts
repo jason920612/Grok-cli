@@ -22,6 +22,7 @@ export function applyPatchTool(skills: ToolSkillRegistry) {
       const approved = await ctx.approval.approvePatch(args.reason, metadata);
       if (!approved) throw new Error("Patch denied by approval policy.");
       const modified: string[] = [];
+      const deleted: string[] = [];
       for (const filePatch of parsed) {
         const target = cleanPatchPath(filePatch.newFileName && filePatch.newFileName !== "/dev/null" ? filePatch.newFileName : filePatch.oldFileName);
         if (!target) throw new Error("Patch file path missing.");
@@ -29,6 +30,11 @@ export function applyPatchTool(skills: ToolSkillRegistry) {
         const oldContent = filePatch.oldFileName === "/dev/null" ? "" : await fs.readFile(abs, "utf8").catch(() => "");
         const next = applyOnePatch(oldContent, filePatch);
         if (next === false) throw new Error(`Patch failed for ${target}`);
+        if (filePatch.newFileName === "/dev/null") {
+          await fs.unlink(abs);
+          deleted.push(target);
+          continue;
+        }
         await fs.mkdir(path.dirname(abs), { recursive: true }).catch(() => undefined);
         await fs.writeFile(abs, next, "utf8");
         modified.push(target);
@@ -36,7 +42,7 @@ export function applyPatchTool(skills: ToolSkillRegistry) {
       console.log(chalk.green("Applied patch:"));
       console.log(colorUnifiedDiff(args.patch));
       ctx.context.add({ type: "patch", content: args.patch, priority: 85, source: { command: args.reason } });
-      return { modifiedFiles: modified, reminder: "Run git_diff and the smallest relevant tests/checks before final answer." };
+      return { modifiedFiles: modified, deletedFiles: deleted, reminder: "Run git_diff and the smallest relevant tests/checks before final answer." };
     }
   );
 }
