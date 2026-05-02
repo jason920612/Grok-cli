@@ -9,16 +9,25 @@ export class ContextManager {
   private step = 0;
 
   constructor(initialItems: ContextItem[] = []) {
-    for (const item of initialItems) this.items.set(item.id, item);
+    for (const item of initialItems) {
+      const createdStep = item.createdStep ?? this.step;
+      this.items.set(item.id, {
+        ...item,
+        createdStep,
+        lastUsedStep: item.lastUsedStep ?? createdStep
+      });
+    }
   }
 
-  add(item: Omit<ContextItem, "id" | "createdAt" | "lastUsedAt" | "tokensEstimate"> & { id?: string; tokensEstimate?: number }): ContextItem {
+  add(item: Omit<ContextItem, "id" | "createdAt" | "lastUsedAt" | "createdStep" | "lastUsedStep" | "tokensEstimate"> & { id?: string; tokensEstimate?: number }): ContextItem {
     const now = Date.now();
     const full: ContextItem = {
       ...item,
       id: item.id ?? `${item.type}-${now}-${Math.random().toString(36).slice(2, 8)}`,
       createdAt: now,
       lastUsedAt: now,
+      createdStep: this.step,
+      lastUsedStep: this.step,
       tokensEstimate: item.tokensEstimate ?? tokenEstimate(item.content)
     };
     this.items.set(full.id, full);
@@ -26,7 +35,7 @@ export class ContextManager {
     return full;
   }
 
-  upsert(id: string, item: Omit<ContextItem, "id" | "createdAt" | "lastUsedAt" | "tokensEstimate"> & { tokensEstimate?: number }): ContextItem {
+  upsert(id: string, item: Omit<ContextItem, "id" | "createdAt" | "lastUsedAt" | "createdStep" | "lastUsedStep" | "tokensEstimate"> & { tokensEstimate?: number }): ContextItem {
     const existing = this.items.get(id);
     const now = Date.now();
     const full: ContextItem = {
@@ -34,6 +43,8 @@ export class ContextManager {
       id,
       createdAt: existing?.createdAt ?? now,
       lastUsedAt: now,
+      createdStep: existing?.createdStep ?? this.step,
+      lastUsedStep: this.step,
       tokensEstimate: item.tokensEstimate ?? tokenEstimate(item.content)
     };
     this.items.set(id, full);
@@ -69,7 +80,7 @@ export class ContextManager {
   }
 
   compactContext(task: string): ContextItem {
-    const summary = compactItems(this.list(), task);
+    const summary = compactItems(this.list(), task, this.step);
     this.items.set(summary.id, summary);
     for (const item of this.list()) {
       if (!item.pinned && ["shell_output", "background_output_summary", "search_result"].includes(item.type)) {
@@ -92,6 +103,7 @@ export class ContextManager {
       if (used + item.tokensEstimate > maxTokens && !item.pinned) continue;
       selected.push(item);
       item.lastUsedAt = Date.now();
+      item.lastUsedStep = this.step;
       used += item.tokensEstimate;
     }
     return selected.sort((a, b) => a.createdAt - b.createdAt);
@@ -99,7 +111,7 @@ export class ContextManager {
 
   private prune(): void {
     for (const item of this.list()) {
-      if (!item.pinned && item.expiresAfterSteps !== undefined && this.step > item.expiresAfterSteps + Math.floor((item.createdAt || 0) / Number.MAX_SAFE_INTEGER)) {
+      if (!item.pinned && item.expiresAfterSteps !== undefined && this.step - item.createdStep > item.expiresAfterSteps) {
         this.items.delete(item.id);
       }
     }

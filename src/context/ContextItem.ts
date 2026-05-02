@@ -25,6 +25,8 @@ export type ContextItem = {
   priority: number;
   createdAt: number;
   lastUsedAt: number;
+  createdStep: number;
+  lastUsedStep: number;
   pinned?: boolean;
   expiresAfterSteps?: number;
   source?: {

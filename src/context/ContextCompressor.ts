@@ -1,7 +1,7 @@
 import type { ContextItem } from "./ContextItem.js";
 import { tokenEstimate } from "./tokenEstimate.js";
 
-export function compactItems(items: ContextItem[], task: string): ContextItem {
+export function compactItems(items: ContextItem[], task: string, step = 0): ContextItem {
   const facts = items
     .filter((item) => item.type !== "file_range" || item.priority >= 50)
     .slice(-80)
@@ -21,6 +21,8 @@ export function compactItems(items: ContextItem[], task: string): ContextItem {
     priority: 100,
     createdAt: now,
     lastUsedAt: now,
+    createdStep: step,
+    lastUsedStep: step,
     pinned: true
   };
 }
