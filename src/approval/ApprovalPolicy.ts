@@ -2,6 +2,17 @@ import type { ApprovalMode } from "../config/loadConfig.js";
 import { classifyCommand, type CommandRisk } from "./RiskClassifier.js";
 import { promptApproval } from "./promptApproval.js";
 
+export type PatchApprovalMetadata = {
+  files: Array<{
+    path: string;
+    operation: "create" | "modify" | "delete";
+    additions: number;
+    deletions: number;
+  }>;
+};
+
+type PatchRisk = "safe" | "ask";
+
 export class ApprovalPolicy {
   private rememberedApprovals = new Set<string>();
 
@@ -50,10 +61,42 @@ export class ApprovalPolicy {
     };
   }
 
-  async approvePatch(reason: string): Promise<boolean> {
+  async approvePatch(reason: string, metadata?: PatchApprovalMetadata): Promise<boolean> {
     if (this.currentMode === "never") return false;
-    return true;
+    const risk = metadata ? classifyPatchRisk(metadata) : "safe";
+    if (risk === "safe") return true;
+    if (this.currentMode === "auto-safe") return false;
+    if (this.currentMode === "auto-local" || this.currentMode === "auto-all") return true;
+    const decision = await promptApproval(formatPatchApprovalCommand(metadata!), reason, "ask");
+    return decision.approved;
   }
+}
+
+export function classifyPatchRisk(metadata: PatchApprovalMetadata): PatchRisk {
+  for (const file of metadata.files) {
+    if (file.operation === "delete") return "ask";
+    if (file.deletions > 100) return "ask";
+    if (isHighRiskPatchPath(file.path)) return "ask";
+  }
+  return "safe";
+}
+
+function isHighRiskPatchPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+  if (normalized === "package.json" || normalized.endsWith("/package.json")) return true;
+  if (/package-lock\.json$|pnpm-lock\.yaml$|yarn\.lock$|bun\.lockb?$/.test(normalized)) return true;
+  if (normalized.startsWith(".github/workflows/") || normalized === ".gitlab-ci.yml") return true;
+  if (/(^|\/)(dockerfile|compose\.ya?ml)$/.test(normalized)) return true;
+  if (/\.(sh|bash|zsh|fish|ps1|bat|cmd)$/.test(normalized)) return true;
+  if (/(^|\/)\.env(\.|$)/.test(normalized)) return true;
+  return false;
+}
+
+function formatPatchApprovalCommand(metadata: PatchApprovalMetadata): string {
+  const files = metadata.files
+    .map((file) => `${file.operation} ${file.path} (+${file.additions}/-${file.deletions})`)
+    .join(", ");
+  return `apply_patch ${files}`;
 }
 
 function approvalKey(command: string, risk: CommandRisk, background: boolean): string {

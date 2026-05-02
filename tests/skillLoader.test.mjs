@@ -7,7 +7,7 @@ import { ContextManager } from "../dist/context/ContextManager.js";
 import { buildModelInput } from "../dist/agent/modelInputBuilder.js";
 import { ToolSkillRegistry } from "../dist/tool-skills/ToolSkillRegistry.js";
 import { LOCAL_TOOL_NAMES, createLocalToolRegistry } from "../dist/tools/definitions/index.js";
-import { ApprovalPolicy } from "../dist/approval/ApprovalPolicy.js";
+import { ApprovalPolicy, classifyPatchRisk } from "../dist/approval/ApprovalPolicy.js";
 import { CORE_SYSTEM_PROMPT } from "../dist/agent/prompts.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { parseResponse } from "../dist/api/responseParser.js";
@@ -93,6 +93,25 @@ test("approval policy supports local and all automation levels", async () => {
 
   const never = new ApprovalPolicy("never");
   assert.equal(await never.approvePatch("workspace patch"), false);
+});
+
+test("patch approval classifies higher-risk patch metadata", async () => {
+  const safePatch = { files: [{ path: "src/example.ts", operation: "modify", additions: 3, deletions: 1 }] };
+  const packagePatch = { files: [{ path: "package.json", operation: "modify", additions: 1, deletions: 1 }] };
+  const deletePatch = { files: [{ path: "src/old.ts", operation: "delete", additions: 0, deletions: 20 }] };
+  const largeDeletionPatch = { files: [{ path: "src/big.ts", operation: "modify", additions: 0, deletions: 101 }] };
+
+  assert.equal(classifyPatchRisk(safePatch), "safe");
+  assert.equal(classifyPatchRisk(packagePatch), "ask");
+  assert.equal(classifyPatchRisk(deletePatch), "ask");
+  assert.equal(classifyPatchRisk(largeDeletionPatch), "ask");
+
+  const autoSafe = new ApprovalPolicy("auto-safe");
+  assert.equal(await autoSafe.approvePatch("safe patch", safePatch), true);
+  assert.equal(await autoSafe.approvePatch("package patch", packagePatch), false);
+
+  const autoLocal = new ApprovalPolicy("auto-local");
+  assert.equal(await autoLocal.approvePatch("package patch", packagePatch), true);
 });
 
 test("system prompt requires plans and final action summaries", () => {
