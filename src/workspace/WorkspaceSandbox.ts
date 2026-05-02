@@ -37,11 +37,19 @@ export class WorkspaceSandbox {
   }
 
   assertWritablePatchPath(inputPath: string): string {
-    const abs = this.resolvePath(inputPath);
+    const abs = this.resolveWritablePath(inputPath);
     const rel = this.relative(abs);
     if (isDeniedPath(rel)) throw new Error(`Patch target denied by sandbox: ${rel}`);
     assertNoSymlinkPathComponents(abs, this.root, inputPath);
     return abs;
+  }
+
+  private resolveWritablePath(inputPath: string): string {
+    if (inputPath.includes("\0")) throw new Error("Invalid path.");
+    const resolved = path.resolve(this.root, inputPath);
+    const realParent = fs.realpathSync(nearestExistingAncestor(resolved));
+    if (!isInside(realParent, this.root)) throw new Error(`Path escapes workspace: ${inputPath}`);
+    return resolved;
   }
 }
 
@@ -84,4 +92,14 @@ function assertNoSymlinkPathComponents(absPath: string, root: string, inputPath:
       throw new Error(`Path contains symlink denied by sandbox: ${inputPath}`);
     }
   }
+}
+
+function nearestExistingAncestor(absPath: string): string {
+  let current = fs.existsSync(absPath) ? absPath : path.dirname(absPath);
+  while (!fs.existsSync(current)) {
+    const parent = path.dirname(current);
+    if (parent === current) throw new Error(`No existing path ancestor: ${absPath}`);
+    current = parent;
+  }
+  return current;
 }
