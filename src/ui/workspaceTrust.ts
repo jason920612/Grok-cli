@@ -67,9 +67,10 @@ export async function manageWorkspaceTrust(workspace: string, store = new Worksp
     });
     if (action === "keep" || action === "cancel") return "Trust settings unchanged.";
     if (action === "clear") {
-      const confirmed = await confirmMenu("Clear remembered trust setting for this workspace?");
+      if (!current) return "No trust setting was stored for this workspace.";
+      const confirmed = await confirmMenu(`Clear remembered trust setting: ${describeTrustEntry(current)}?`);
       if (!confirmed) continue;
-      return store.clearTrust(workspace) ? "Trust setting cleared." : "No trust setting was stored for this workspace.";
+      return store.clearTrustEntry(current) ? "Trust setting cleared." : "No trust setting was stored for this workspace.";
     }
     if (action === "base" && current?.scope === "custom-descendants") {
       const base = await askDirectory("Trusted base directory", current.baseDirectory ?? path.dirname(workspace));

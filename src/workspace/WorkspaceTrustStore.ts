@@ -51,8 +51,16 @@ export class WorkspaceTrustStore {
 
   clearTrust(workspace: string): boolean {
     const target = normalizeExistingDirectory(workspace);
+    return this.clearTrustWorkspace(target);
+  }
+
+  clearTrustEntry(entry: WorkspaceTrustEntry): boolean {
+    return this.clearTrustWorkspace(entry.workspace);
+  }
+
+  private clearTrustWorkspace(workspace: string): boolean {
     const data = this.read();
-    const next = data.entries.filter((item) => item.workspace !== target);
+    const next = data.entries.filter((item) => item.workspace !== workspace);
     const changed = next.length !== data.entries.length;
     if (changed) {
       data.entries = next;
