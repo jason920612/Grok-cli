@@ -25,8 +25,8 @@ export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfi
     toolChoice: "auto",
     maxSteps: 30,
     serverTools: true,
-    enableWebSearch: false,
-    enableXSearch: false,
+    enableWebSearch: true,
+    enableXSearch: true,
     workspaceRoot: cwd,
     ...projectConfig,
     ...overrides

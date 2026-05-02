@@ -122,10 +122,12 @@ During multi-step work, Grok Code asks the model to state a brief plan before to
 
 ## Server-side Tools vs Local Tools
 
-xAI server-side built-ins are optional:
+xAI server-side built-ins are enabled by default:
 
-- `--enable-web-search` adds `{ type: "web_search" }`
-- `--enable-x-search` adds `{ type: "x_search" }`
+- `web_search` is included by default
+- `x_search` is included by default
+- `--enable-web-search` explicitly enables `{ type: "web_search" }`
+- `--enable-x-search` explicitly enables `{ type: "x_search" }`
 - `--no-server-tools` disables server-side tools
 
 Server-side tools are executed by xAI. Local filesystem, shell, git, patching, and background process tools are always custom local tools executed by this CLI.
