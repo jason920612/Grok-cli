@@ -42,6 +42,7 @@ export async function chooseWorkspace(currentWorkspace: string, store = new Work
         ? await askDirectory("Workspace path", currentWorkspace)
         : choice.slice("recent:".length);
   if (!selected) return null;
+  if (sameDirectory(selected, currentWorkspace)) return null;
   const trusted = await ensureWorkspaceTrusted(selected, store);
   if (!trusted) return null;
   const confirmed = await confirmMenu(`Switch workspace to ${selected}?`);
@@ -139,4 +140,12 @@ function formatTrustPreview(workspace: string, scope: WorkspaceTrustScope, base?
 
 function formatEntry(entry: WorkspaceTrustEntry): string {
   return `workspace trust: ${describeTrustEntry(entry)}`;
+}
+
+function sameDirectory(left: string, right: string): boolean {
+  try {
+    return fs.realpathSync(left) === fs.realpathSync(right);
+  } catch {
+    return path.resolve(left) === path.resolve(right);
+  }
 }
