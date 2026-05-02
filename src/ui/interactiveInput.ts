@@ -21,7 +21,7 @@ export async function readInteractiveLine(prompt = "grok-code>"): Promise<string
       clearPromptAndMenu();
       process.stdin.off("keypress", onKeypress);
       process.stdin.setRawMode(wasRaw);
-      process.stdout.write("\n");
+      process.stdout.write(`${chalk.green(prompt)} ${value}\n`);
       resolve(value);
     };
 

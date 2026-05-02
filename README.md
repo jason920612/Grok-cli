@@ -179,6 +179,7 @@ Built-in general skills include:
 - environment awareness
 - project-local setup
 - project understanding
+- git commit and push
 - tree-based code navigation
 
 Project customization is supported through:
@@ -190,6 +191,8 @@ Project customization is supported through:
 Project skills cannot override core safety rules.
 
 The `create_skill` local tool can create project-local reusable skills in `.grok-code/skills/*.md`. Use it for stable project conventions, debugging workflows, review checklists, or domain-specific rules. Do not store secrets, transient logs, or one-off task notes as skills.
+
+When no existing skill fits a reusable workflow or domain convention, the agent is encouraged to research with available tools, including `web_search` or `x_search` when current public information is useful, then design a new project-local skill with `create_skill`.
 
 Use `grok-code learn-project` to explicitly trigger the project-understanding skill. It inspects the current workspace through tools and creates or updates `GROK.md` with durable notes about project purpose, stack, structure, commands, conventions, risks, and unknowns. In interactive mode, use `/learn-project`.
 

@@ -16,6 +16,15 @@ export function parseResponse(response: any): ParsedResponse {
   const output = Array.isArray(response?.output) ? response.output : [];
   const functionCalls: ParsedFunctionCall[] = [];
   const messages: string[] = [];
+  const seenMessages = new Set<string>();
+
+  const addMessage = (value: unknown) => {
+    if (typeof value !== "string") return;
+    const normalized = value.trim();
+    if (!normalized || seenMessages.has(normalized)) return;
+    seenMessages.add(normalized);
+    messages.push(normalized);
+  };
 
   for (const item of output) {
     if (item?.type === "function_call") {
@@ -29,16 +38,14 @@ export function parseResponse(response: any): ParsedResponse {
     }
     if (item?.type === "message" && Array.isArray(item.content)) {
       for (const content of item.content) {
-        if (typeof content?.text === "string") messages.push(content.text);
-        if (typeof content?.output_text === "string") messages.push(content.output_text);
+        addMessage(content?.text);
+        addMessage(content?.output_text);
       }
     }
-    if (typeof item?.content === "string") messages.push(item.content);
+    addMessage(item?.content);
   }
 
-  if (typeof response?.output_text === "string" && response.output_text.length > 0) {
-    messages.push(response.output_text);
-  }
+  addMessage(response?.output_text);
 
   return {
     id: String(response?.id ?? ""),

@@ -10,6 +10,7 @@ import { LOCAL_TOOL_NAMES, createLocalToolRegistry } from "../dist/tools/definit
 import { ApprovalPolicy } from "../dist/approval/ApprovalPolicy.js";
 import { CORE_SYSTEM_PROMPT } from "../dist/agent/prompts.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
+import { parseResponse } from "../dist/api/responseParser.js";
 
 const root = process.cwd();
 const skillPath = path.join(root, "src", "skills", "builtin", "tree-based-code-navigation.md");
@@ -28,6 +29,12 @@ test("coding tasks select tree-based code navigation", () => {
   const loader = new SkillLoader(root);
   const selected = loader.select("debug a failing test with a stack trace and modify code");
   assert.ok(selected.some((skill) => skill.id === "tree-based-code-navigation"));
+});
+
+test("commit and push tasks select git workflow skill", () => {
+  const loader = new SkillLoader(root);
+  const selected = loader.select("幫我寫commit並push");
+  assert.ok(selected.some((skill) => skill.id === "git-commit-push"));
 });
 
 test("non-coding tasks do not select tree-based code navigation unconditionally", () => {
@@ -85,8 +92,31 @@ test("approval policy supports local and all automation levels", async () => {
 
 test("system prompt requires plans and final action summaries", () => {
   assert.match(CORE_SYSTEM_PROMPT, /Before requesting tools, briefly tell the user/);
+  assert.match(CORE_SYSTEM_PROMPT, /request the tools in the same turn/);
+  assert.match(CORE_SYSTEM_PROMPT, /If no existing skill fits/);
+  assert.match(CORE_SYSTEM_PROMPT, /create_skill/);
+  assert.match(CORE_SYSTEM_PROMPT, /same language the user used/);
+  assert.match(CORE_SYSTEM_PROMPT, /plain terminal/);
+  assert.match(CORE_SYSTEM_PROMPT, /not Markdown formatting/);
   assert.match(CORE_SYSTEM_PROMPT, /Before the first tool call, provide a brief plan/);
   assert.match(CORE_SYSTEM_PROMPT, /final answer must summarize the completed actions/);
+});
+
+test("response parser deduplicates repeated output text fields", () => {
+  const parsed = parseResponse({
+    id: "resp_1",
+    output_text: "same answer",
+    output: [
+      {
+        type: "message",
+        content: [
+          { type: "output_text", text: "same answer" },
+          { type: "output_text", output_text: "same answer" }
+        ]
+      }
+    ]
+  });
+  assert.equal(parsed.finalText, "same answer");
 });
 
 test("xAI server-side search tools are enabled by default", () => {

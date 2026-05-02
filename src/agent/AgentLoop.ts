@@ -35,6 +35,7 @@ export class AgentLoop {
     let finalText = "";
     const usedToolNames = new Set<string>();
     const toolActionSummaries: ToolActionSummary[] = [];
+    let planOnlyReprompts = 0;
     const hasModifiedFiles = { value: false };
     this.context.upsert("user-task", { type: "user_task", content: task, priority: 100, pinned: true });
 
@@ -69,6 +70,14 @@ export class AgentLoop {
       const parsed = parseResponse(response);
       previousResponseId = parsed.id || previousResponseId;
       if (parsed.functionCalls.length === 0) {
+        if (planOnlyReprompts < 2 && shouldContinueAfterPlanOnlyResponse(parsed.finalText, task, toolActionSummaries.length)) {
+          planOnlyReprompts += 1;
+          console.log(parsed.finalText);
+          console.log("Grok provided a plan without tool calls; asking it to continue with the required tools.");
+          pendingInput = "You provided a plan but did not request any function_call tools. The user asked for an action, not only a plan. Continue now by requesting the appropriate tools in this response. If the action cannot be completed, explain the concrete blocker after using any relevant inspection tools.";
+          step += 1;
+          continue;
+        }
         finalText = parsed.finalText;
         break;
       }
@@ -137,6 +146,17 @@ function formatActionSummary(actions: ToolActionSummary[]): string {
   return actions
     .map((action) => `- step ${action.step}: ${action.name} ${action.ok ? "ok" : "failed"} - ${action.summary}`)
     .join("\n");
+}
+
+function shouldContinueAfterPlanOnlyResponse(text: string, task: string, actionCount: number): boolean {
+  if (!text.trim()) return false;
+  const lower = text.toLowerCase();
+  const taskLower = task.toLowerCase();
+  const saysItWillUseTools = /(brief plan|before first tool call|i'?ll now|i will now|proceeding to|run the first tool|call .*tool|use .*tool)/i.test(text);
+  const actionTask = /(commit|push|edit|modify|fix|write|create|delete|run|test|build|review|提交|推送|修改|刪除|创建|建立)/i.test(taskLower);
+  const claimsNoCapability = /no .*tool available|there is no .*tool|tools limited to/i.test(lower);
+  const localizedActionTask = ["提交", "推送", "修改", "修正", "刪除", "创建", "建立"].some((keyword) => taskLower.includes(keyword));
+  return actionCount === 0 && (actionTask || localizedActionTask) && (saysItWillUseTools || claimsNoCapability);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
