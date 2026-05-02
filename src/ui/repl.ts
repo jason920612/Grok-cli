@@ -47,7 +47,7 @@ async function handleSlash(command: string, agent: Agent): Promise<void> {
       console.log(await runWithEscInterrupt((signal) => agent.run(PROJECT_UNDERSTANDING_TASK, false, signal)));
       break;
     case "/skills":
-      console.log(agent.skillLoader.loadAll().map((skill) => `${skill.id}: ${skill.description}`).join("\n"));
+      console.log(formatSkills(agent));
       break;
     case "/tools":
       console.log(agent.toolSkills.toolIndex());
@@ -80,6 +80,20 @@ async function handleSlash(command: string, agent: Agent): Promise<void> {
     default:
       console.log(`Unknown command: ${name}`);
   }
+}
+
+function formatSkills(agent: Agent): string {
+  const active = agent.skillLoader.select("interactive session");
+  const activeIds = new Set(active.map((skill) => skill.id));
+  const available = agent.skillLoader.loadAll().filter((skill) => !activeIds.has(skill.id));
+  const format = (items: typeof active) => items.map((skill) => `- ${skill.id}: ${skill.description}`).join("\n") || "- none";
+  return [
+    chalk.bold("Loaded for the current interactive baseline:"),
+    format(active),
+    "",
+    chalk.bold("Available to load when triggered:"),
+    format(available)
+  ].join("\n");
 }
 
 function formatDiffResult(result: unknown): string {

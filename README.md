@@ -73,6 +73,7 @@ Run `grok-code` with no task to enter interactive mode.
 - Press Enter to accept and run the highlighted command.
 - Press Esc while editing the prompt to cancel the command menu and clear the current input.
 - Press Esc while a model request is running to interrupt the current request.
+- `/skills` shows skills loaded for the current interactive baseline separately from skills that are available and loaded only when triggered.
 
 Useful slash commands:
 

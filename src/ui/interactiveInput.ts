@@ -16,10 +16,9 @@ export async function readInteractiveLine(prompt = "grok-code>"): Promise<string
   return new Promise((resolve) => {
     let buffer = "";
     let selected = 0;
-    let menuLines = 0;
 
     const cleanup = (value: string) => {
-      clearMenu();
+      clearPromptAndMenu();
       process.stdin.off("keypress", onKeypress);
       process.stdin.setRawMode(wasRaw);
       process.stdout.write("\n");
@@ -33,21 +32,14 @@ export async function readInteractiveLine(prompt = "grok-code>"): Promise<string
       return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(needle)).slice(0, 10);
     };
 
-    const clearMenu = () => {
-      if (menuLines === 0) return;
-      readline.moveCursor(process.stdout, 0, -menuLines);
-      for (let i = 0; i < menuLines; i += 1) {
-        readline.clearLine(process.stdout, 0);
-        if (i < menuLines - 1) readline.moveCursor(process.stdout, 0, 1);
-      }
-      readline.moveCursor(process.stdout, 0, -(menuLines - 1));
-      menuLines = 0;
+    const clearPromptAndMenu = () => {
+      readline.cursorTo(process.stdout, 0);
+      readline.clearLine(process.stdout, 0);
+      readline.clearScreenDown(process.stdout);
     };
 
     const render = () => {
-      clearMenu();
-      readline.clearLine(process.stdout, 0);
-      readline.cursorTo(process.stdout, 0);
+      clearPromptAndMenu();
       process.stdout.write(`${chalk.green(prompt)} ${buffer}`);
       const list = matches();
       if (list.length > 0) {
@@ -59,8 +51,7 @@ export async function readInteractiveLine(prompt = "grok-code>"): Promise<string
           const name = i === selected ? chalk.cyan(cmd.usage) : cmd.usage;
           process.stdout.write(`${prefix} ${name} ${chalk.dim(cmd.description)}\n`);
         }
-        menuLines = list.length + 1;
-        readline.moveCursor(process.stdout, 0, -menuLines);
+        readline.moveCursor(process.stdout, 0, -(list.length + 1));
         readline.cursorTo(process.stdout, `${prompt} ${buffer}`.length);
       }
     };
