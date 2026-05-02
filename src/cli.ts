@@ -32,8 +32,8 @@ export async function main(): Promise<void> {
     .option("--no-web-search", "Disable xAI web_search server-side tool")
     .option("--no-x-search", "Disable xAI x_search server-side tool");
 
-  program.command("ask <question...>").description("Ask a question").action(async (question: string[], opts: CliOpts) => runOne(question.join(" "), opts, "ask"));
-  program.command("edit <task...>").description("Run an edit task").action(async (task: string[], opts: CliOpts) => runOne(task.join(" "), opts, "edit"));
+  program.command("ask <question...>").description("Ask a question").action(async (question: string[]) => runOne(question.join(" "), program.opts<CliOpts>(), "ask"));
+  program.command("edit <task...>").description("Run an edit task").action(async (task: string[]) => runOne(task.join(" "), program.opts<CliOpts>(), "edit"));
   program.command("review").description("Review current diff").action(async (_opts: CliOpts) => runOne("Review the current git diff for bugs, regressions, risks, and missing tests.", program.opts<CliOpts>(), "review"));
   program.command("learn-project").description("Inspect this project and write durable notes to GROK.md").action(async (_opts: CliOpts) => runOne(PROJECT_UNDERSTANDING_TASK, program.opts<CliOpts>(), "learn-project"));
   program.command("status").description("Show git status").action(async () => localStatus("status"));
