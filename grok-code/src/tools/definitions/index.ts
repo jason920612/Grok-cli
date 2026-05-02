@@ -7,6 +7,10 @@ import { getFileOverviewTool } from "./getFileOverview.js";
 import { readFileRangeTool } from "./readFileRange.js";
 import { searchTextTool } from "./searchText.js";
 import { searchSymbolsTool } from "./searchSymbols.js";
+import { searchCodeTool } from "./searchCode.js";
+import { findSymbolTool } from "./findSymbol.js";
+import { getRelatedFilesTool } from "./getRelatedFiles.js";
+import { expandNodeTool } from "./expandNode.js";
 import { createSkillTool } from "./createSkill.js";
 import { applyPatchTool } from "./applyPatch.js";
 import { runShellTool } from "./runShell.js";
@@ -26,6 +30,10 @@ export const LOCAL_TOOL_NAMES = [
   "read_file_range",
   "search_text",
   "search_symbols",
+  "search_code",
+  "find_symbol",
+  "get_related_files",
+  "expand_node",
   "create_skill",
   "apply_patch",
   "run_shell",
@@ -48,6 +56,10 @@ export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry
     readFileRangeTool(skills),
     searchTextTool(skills),
     searchSymbolsTool(skills),
+    searchCodeTool(skills),
+    findSymbolTool(skills),
+    getRelatedFilesTool(skills),
+    expandNodeTool(skills),
     createSkillTool(skills),
     applyPatchTool(skills),
     runShellTool(skills),

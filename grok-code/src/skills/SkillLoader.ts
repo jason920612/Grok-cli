@@ -67,6 +67,7 @@ function firstLine(content: string): string {
 function priorityFor(id: string): number {
   if (id === "context-hygiene") return 100;
   if (id === "project-local-setup") return 95;
+  if (id === "tree-based-code-navigation") return 92;
   if (id === "environment-awareness") return 90;
   return 70;
 }
@@ -80,7 +81,26 @@ function triggersFor(id: string): string[] {
     "shell-usage": ["command", "shell", "run", "build", "lint"],
     "environment-awareness": ["environment", "install", "setup", "build", "test", "dev"],
     "project-local-setup": ["install", "setup", "dependency", "tooling"],
-    "project-understanding": ["project-understanding"]
+    "project-understanding": ["project-understanding"],
+    "tree-based-code-navigation": [
+      "codebase",
+      "find relevant files",
+      "modify code",
+      "debug",
+      "failing test",
+      "stack trace",
+      "refactor",
+      "implementation",
+      "where is",
+      "search project",
+      "read file",
+      "locate logic",
+      "edit",
+      "fix",
+      "change",
+      "feature",
+      "review"
+    ]
   }[id] ?? [id];
 }
 

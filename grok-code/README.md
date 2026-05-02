@@ -137,6 +137,10 @@ Included tools:
 - `read_file_range`
 - `search_text`
 - `search_symbols`
+- `search_code`
+- `find_symbol`
+- `get_related_files`
+- `expand_node`
 - `create_skill`
 - `apply_patch`
 - `run_shell`
@@ -169,6 +173,7 @@ Built-in general skills include:
 - environment awareness
 - project-local setup
 - project understanding
+- tree-based code navigation
 
 Project customization is supported through:
 
@@ -181,6 +186,10 @@ Project skills cannot override core safety rules.
 The `create_skill` local tool can create project-local reusable skills in `.grok-code/skills/*.md`. Use it for stable project conventions, debugging workflows, review checklists, or domain-specific rules. Do not store secrets, transient logs, or one-off task notes as skills.
 
 Use `grok-code learn-project` to explicitly trigger the project-understanding skill. It inspects the current workspace through tools and creates or updates `GROK.md` with durable notes about project purpose, stack, structure, commands, conventions, risks, and unknowns. In interactive mode, use `/learn-project`.
+
+### Tree-based Code Navigation
+
+The tree-based code navigation skill guides coding tasks through a bounded search tree before editing. It starts with searches, builds branches for entrypoints, keywords, symbols, dependencies, tests, runtime errors, and documentation, then expands only high-confidence nodes. This reduces token waste by avoiding broad full-file reads and pushes the model toward `search_code`, `find_symbol`, `expand_node`, `get_related_files`, `get_file_overview`, and precise `read_file_range` calls. The current tools are lightweight path/text/symbol scanners; they can later be backed by a richer symbol index, dependency graph, or semantic search implementation.
 
 ## Context Manager and Compaction
 
