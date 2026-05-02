@@ -77,6 +77,7 @@ async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void>
   await agent.background.stopAll("one-shot exit cleanup");
   const store = new SessionStore(process.cwd());
   const session = store.create(agent.config.model, opts.approval ?? "on-request");
+  session.taskSummary = task;
   session.contextItems = agent.context.list();
   session.backgroundProcesses = agent.background.list();
   store.save(session);
