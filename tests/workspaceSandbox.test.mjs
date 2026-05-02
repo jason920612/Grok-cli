@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { WorkspaceSandbox } from "../dist/workspace/WorkspaceSandbox.js";
+import { WorkspaceSandbox, isDeniedPath } from "../dist/workspace/WorkspaceSandbox.js";
 
 test("readable files must resolve inside the workspace", (t) => {
   const { root, outside } = makeWorkspace();
@@ -33,6 +33,19 @@ test("readable symlinks cannot bypass denied workspace paths", (t) => {
 
   const sandbox = new WorkspaceSandbox(root);
   assert.throws(() => sandbox.assertReadableFile("safe-link.txt"), /Path is denied by sandbox: \.env/);
+});
+
+test(".env.example is readable while real env files stay denied", () => {
+  const { root } = makeWorkspace();
+  fs.writeFileSync(path.join(root, ".env"), "SECRET=value");
+  fs.writeFileSync(path.join(root, ".env.local"), "SECRET=value");
+  fs.writeFileSync(path.join(root, ".env.example"), "XAI_API_KEY=");
+
+  const sandbox = new WorkspaceSandbox(root);
+  assert.equal(isDeniedPath(".env.example"), false);
+  assert.equal(path.basename(sandbox.assertReadableFile(".env.example")), ".env.example");
+  assert.throws(() => sandbox.assertReadableFile(".env"), /Path is denied by sandbox: \.env/);
+  assert.throws(() => sandbox.assertReadableFile(".env.local"), /Path is denied by sandbox: \.env\.local/);
 });
 
 test("writable patch paths reject symlink path components", (t) => {

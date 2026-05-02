@@ -47,6 +47,7 @@ export class WorkspaceSandbox {
 
 export function isDeniedPath(relPath: string): boolean {
   const normalized = relPath.replace(/\\/g, "/");
+  if (normalized === ".env.example" || normalized.endsWith("/.env.example")) return false;
   if (normalized === ".env" || normalized.startsWith(".env.")) return true;
   if (normalized.includes("/.env.")) return true;
   if (/\.(min\.js|min\.css)$/.test(normalized)) return true;
