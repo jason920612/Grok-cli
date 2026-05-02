@@ -47,6 +47,7 @@ grok-code edit "modify task"
 grok-code review
 grok-code learn-project
 grok-code status
+grok-code git-status
 grok-code diff
 grok-code resume
 grok-code resume <session-id>
@@ -81,6 +82,7 @@ Useful slash commands:
 ```txt
 /help
 /status
+/git-status
 /diff
 /approval <mode>
 /learn-project
@@ -270,6 +272,18 @@ Show a git-style diff in interactive mode:
 
 ```txt
 /diff
+```
+
+Show the current session/runtime status:
+
+```txt
+/status
+```
+
+Show repository status:
+
+```txt
+/git-status
 ```
 
 Start and stop a dev server:
