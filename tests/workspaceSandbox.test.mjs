@@ -37,15 +37,24 @@ test("readable symlinks cannot bypass denied workspace paths", (t) => {
 
 test(".env.example is readable while real env files stay denied", () => {
   const { root } = makeWorkspace();
+  fs.mkdirSync(path.join(root, "sub"));
   fs.writeFileSync(path.join(root, ".env"), "SECRET=value");
   fs.writeFileSync(path.join(root, ".env.local"), "SECRET=value");
   fs.writeFileSync(path.join(root, ".env.example"), "XAI_API_KEY=");
+  fs.writeFileSync(path.join(root, "sub", ".env"), "SECRET=value");
+  fs.writeFileSync(path.join(root, "sub", ".env.local"), "SECRET=value");
+  fs.writeFileSync(path.join(root, "sub", ".env.example"), "XAI_API_KEY=");
 
   const sandbox = new WorkspaceSandbox(root);
   assert.equal(isDeniedPath(".env.example"), false);
+  assert.equal(isDeniedPath("sub/.env.example"), false);
+  assert.equal(isDeniedPath("sub/.env"), true);
   assert.equal(path.basename(sandbox.assertReadableFile(".env.example")), ".env.example");
+  assert.equal(path.basename(sandbox.assertReadableFile("sub/.env.example")), ".env.example");
   assert.throws(() => sandbox.assertReadableFile(".env"), /Path is denied by sandbox: \.env/);
   assert.throws(() => sandbox.assertReadableFile(".env.local"), /Path is denied by sandbox: \.env\.local/);
+  assert.throws(() => sandbox.assertReadableFile("sub/.env"), /Path is denied by sandbox: sub\/\.env/);
+  assert.throws(() => sandbox.assertReadableFile("sub/.env.local"), /Path is denied by sandbox: sub\/\.env\.local/);
 });
 
 test("writable patch paths reject symlink path components", (t) => {

@@ -55,11 +55,14 @@ export class WorkspaceSandbox {
 
 export function isDeniedPath(relPath: string): boolean {
   const normalized = relPath.replace(/\\/g, "/");
-  if (normalized === ".env.example" || normalized.endsWith("/.env.example")) return false;
-  if (normalized === ".env" || normalized.startsWith(".env.")) return true;
-  if (normalized.includes("/.env.")) return true;
+  if (normalized.split("/").some((segment) => isDeniedEnvSegment(segment))) return true;
   if (/\.(min\.js|min\.css)$/.test(normalized)) return true;
   return DEFAULT_IGNORES.filter((pattern) => !pattern.includes("*")).some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
+}
+
+function isDeniedEnvSegment(segment: string): boolean {
+  if (segment === ".env.example") return false;
+  return segment === ".env" || segment.startsWith(".env.");
 }
 
 export function looksBinary(absPath: string): boolean {
