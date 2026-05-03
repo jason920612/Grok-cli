@@ -147,12 +147,12 @@ function setApproval(agent: Agent, mode: ApprovalMode): string {
   return `Approval mode set to ${mode}: ${approvalDescription(mode)}`;
 }
 
-function approvalDescription(mode: ApprovalMode): string {
+export function approvalDescription(mode: ApprovalMode): string {
   return {
     "on-request": "Default. Auto-allow workspace file edits and safe local commands; ask for riskier commands.",
     "auto-local": "Auto-allow operations scoped to this workspace/local environment; still asks for global environment changes.",
     "auto-safe": "Auto-allow only safe commands and local patch edits; ask for network/install/unknown commands.",
-    "auto-all": "Auto-allow every model-requested operation, including global or destructive commands.",
+    "auto-all": "Auto-allow model-requested operations except commands that are hard-denied by the safety policy.",
     never: "Deny approval-required operations."
   }[mode];
 }

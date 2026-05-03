@@ -16,6 +16,7 @@ import { CORE_SYSTEM_PROMPT } from "../dist/agent/prompts.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { parseResponse } from "../dist/api/responseParser.js";
 import { parseMaxSteps, parseSandboxProfile, parseServerToolOverrides } from "../dist/cli.js";
+import { approvalDescription } from "../dist/ui/repl.js";
 import { SLASH_COMMANDS, visibleSlashCommands } from "../dist/ui/slashCommands.js";
 
 const root = process.cwd();
@@ -116,6 +117,12 @@ test("approval policy supports local and all automation levels", async () => {
 
   const never = new ApprovalPolicy("never");
   assert.equal(await never.approvePatch("workspace patch"), false);
+});
+
+test("auto-all approval description preserves hard-deny semantics", () => {
+  const description = approvalDescription("auto-all");
+  assert.match(description, /hard-denied/i);
+  assert.doesNotMatch(description, /destructive commands/i);
 });
 
 test("Windows destructive delete commands are hard-denied", () => {
