@@ -5,7 +5,6 @@ import fg from "fast-glob";
 import { z } from "zod";
 import { schemas } from "../toolSchemas.js";
 import { commandExists, makeTool } from "./helpers.js";
-import { createIgnoreRules } from "../../workspace/IgnoreRules.js";
 import type { ToolSkillRegistry } from "../../tool-skills/ToolSkillRegistry.js";
 
 const execFileAsync = promisify(execFile);
@@ -44,12 +43,11 @@ async function rgSearch(ctx: any, query: string, base: string, glob: string | un
 }
 
 async function nodeSearch(ctx: any, query: string, base: string, glob: string | undefined, max: number) {
-  const ig = createIgnoreRules(ctx.sandbox.profile);
-  const entries = await fg(glob ?? "**/*", { cwd: ctx.sandbox.resolvePath(base), onlyFiles: true, dot: true });
+  const entries = await fg(glob ?? "**/*", { cwd: ctx.sandbox.resolvePath(base), onlyFiles: true, dot: true, ignore: ["**/.git/**", "**/node_modules/**"] });
   const results: Array<{ path: string; line: number; preview: string }> = [];
   for (const entry of entries) {
     const rel = base === "." ? entry : `${base}/${entry}`;
-    if (ig.ignores(rel) || ctx.sandbox.isPathDenied(rel, "read")) continue;
+    if (ctx.sandbox.isPathDenied(rel, "read")) continue;
     let text = "";
     try { text = await fs.readFile(ctx.sandbox.assertReadableFile(rel), "utf8"); } catch { continue; }
     text.split(/\r?\n/).forEach((line, index) => {

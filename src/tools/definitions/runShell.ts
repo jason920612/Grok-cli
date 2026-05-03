@@ -1,7 +1,6 @@
 import { exec } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 import { promisify } from "node:util";
+import fg from "fast-glob";
 import { z } from "zod";
 import { schemas } from "../toolSchemas.js";
 import { makeTool, summarizeOutput } from "./helpers.js";
@@ -21,15 +20,15 @@ export function runShellTool(skills: ToolSkillRegistry) {
       const approval = await ctx.approval.approveCommand(args.command, args.reason);
       if (!approval.approved) throw new Error(approval.message ?? `Command rejected: ${approval.risk}`);
       const timeout = (args.timeoutSeconds ?? 120) * 1000;
-      const existingGeneratedDirs = snapshotGeneratedDirs(ctx.workspaceRoot);
+      const existingGeneratedDirs = await snapshotGeneratedDirs(ctx.workspaceRoot);
       try {
         const { stdout, stderr } = await execAsync(args.command, { cwd: ctx.workspaceRoot, timeout, maxBuffer: 5_000_000, windowsHide: true });
-        markNewGeneratedDirs(ctx, existingGeneratedDirs);
+        await markNewGeneratedDirs(ctx, existingGeneratedDirs);
         const output = summarizeOutput(`${stdout}${stderr ? `\n${stderr}` : ""}`);
         ctx.context.add({ type: "shell_output", content: `$ ${args.command}\n${output.text}`, priority: /test|build|lint|typecheck/i.test(args.command) ? 75 : 50, expiresAfterSteps: 2, source: { command: args.command } });
         return { command: args.command, exitCode: 0, stdout: output.text, truncated: output.truncated };
       } catch (error: any) {
-        markNewGeneratedDirs(ctx, existingGeneratedDirs);
+        await markNewGeneratedDirs(ctx, existingGeneratedDirs);
         const combined = `${error?.stdout ?? ""}${error?.stderr ? `\n${error.stderr}` : ""}${error?.message ? `\n${error.message}` : ""}`;
         const output = summarizeOutput(combined);
         ctx.context.add({ type: /test|build|lint|typecheck/i.test(args.command) ? "test_result" : "shell_output", content: `$ ${args.command}\n${output.text}`, priority: 80, expiresAfterSteps: 2, source: { command: args.command } });
@@ -39,19 +38,22 @@ export function runShellTool(skills: ToolSkillRegistry) {
   );
 }
 
-function snapshotGeneratedDirs(workspaceRoot: string): Set<string> {
-  const existing = new Set<string>();
-  for (const dir of GENERATED_OUTPUT_DIRS) {
-    const abs = path.join(workspaceRoot, dir);
-    if (directoryExists(abs)) existing.add(dir);
-  }
-  return existing;
+async function snapshotGeneratedDirs(workspaceRoot: string): Promise<Set<string>> {
+  const patterns = GENERATED_OUTPUT_DIRS.flatMap((dir) => [dir, `**/${dir}`]);
+  const matches = await fg(patterns, {
+    cwd: workspaceRoot,
+    dot: true,
+    onlyDirectories: true,
+    unique: true,
+    ignore: ["**/.git/**", "**/node_modules/**"]
+  });
+  return new Set(matches.map((entry) => entry.replace(/\\/g, "/")));
 }
 
-function markNewGeneratedDirs(ctx: any, before: Set<string>): void {
-  for (const dir of GENERATED_OUTPUT_DIRS) {
-    const abs = path.join(ctx.workspaceRoot, dir);
-    if (before.has(dir) || !directoryExists(abs)) continue;
+async function markNewGeneratedDirs(ctx: any, before: Set<string>): Promise<void> {
+  const after = await snapshotGeneratedDirs(ctx.workspaceRoot);
+  for (const dir of after) {
+    if (before.has(dir)) continue;
     ctx.sandbox.allowGeneratedOutputPath(dir);
     ctx.context.add({
       type: "environment_summary",
@@ -60,13 +62,5 @@ function markNewGeneratedDirs(ctx: any, before: Set<string>): void {
       expiresAfterSteps: 4,
       source: { command: "sandbox generated output tracking" }
     });
-  }
-}
-
-function directoryExists(absPath: string): boolean {
-  try {
-    return fs.statSync(absPath).isDirectory();
-  } catch {
-    return false;
   }
 }

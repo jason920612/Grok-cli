@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { applyPatchTool } from "../dist/tools/definitions/applyPatch.js";
+import { listFilesTool } from "../dist/tools/definitions/listFiles.js";
 import { runShellTool } from "../dist/tools/definitions/runShell.js";
 import { ApprovalPolicy } from "../dist/approval/ApprovalPolicy.js";
 import { ContextManager } from "../dist/context/ContextManager.js";
@@ -56,6 +57,34 @@ test("run_shell allows newly generated output directories for the session", asyn
   }, ctx);
 
   assert.equal(path.basename(ctx.sandbox.assertReadableFile("coverage/report.txt")), "report.txt");
+});
+
+test("run_shell allows newly generated nested output directories for the session", async () => {
+  const root = makeWorkspace();
+  const tool = runShellTool(new ToolSkillRegistry(root));
+  const ctx = makeContext(root);
+
+  await tool.execute({
+    command: "node -e \"const fs=require('fs');fs.mkdirSync('packages/api/dist',{recursive:true});fs.writeFileSync('packages/api/dist/report.txt','ok')\"",
+    reason: "create a nested generated report"
+  }, ctx);
+
+  assert.equal(path.basename(ctx.sandbox.assertReadableFile("packages/api/dist/report.txt")), "report.txt");
+});
+
+test("list_files shows generated outputs allowed for the current session", async () => {
+  const root = makeWorkspace();
+  const runShell = runShellTool(new ToolSkillRegistry(root));
+  const listFiles = listFilesTool(new ToolSkillRegistry(root));
+  const ctx = makeContext(root);
+
+  await runShell.execute({
+    command: "node -e \"const fs=require('fs');fs.mkdirSync('coverage',{recursive:true});fs.writeFileSync('coverage/report.txt','ok')\"",
+    reason: "create a generated test report"
+  }, ctx);
+
+  const result = await listFiles.execute({ glob: "coverage/**" }, ctx);
+  assert.deepEqual(result.files, ["coverage/report.txt"]);
 });
 
 function makeWorkspace() {
