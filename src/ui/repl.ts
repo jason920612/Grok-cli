@@ -5,7 +5,7 @@ import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
 import { colorDiff } from "./diffView.js";
 import { readInteractiveLine, runWithEscInterrupt } from "./interactiveInput.js";
-import { SLASH_COMMANDS } from "./slashCommands.js";
+import { visibleSlashCommands } from "./slashCommands.js";
 import type { ApprovalMode } from "../config/loadConfig.js";
 import { formatSessionStatus } from "./terminal.js";
 import { chooseWorkspace, formatWorkspaceTrustStatus, manageWorkspaceTrust } from "./workspaceTrust.js";
@@ -40,7 +40,7 @@ async function handleSlash(command: string, agent: Agent, options: ReplOptions):
   const [name, ...rest] = command.split(/\s+/);
   switch (name) {
     case "/help":
-      console.log(SLASH_COMMANDS.map((cmd) => `${cmd.usage.padEnd(24)} ${cmd.description}`).join("\n"));
+      console.log(visibleSlashCommands().map((cmd) => `${cmd.usage.padEnd(24)} ${cmd.description}`).join("\n"));
       break;
     case "/status":
       console.log([formatSessionStatus(agent.config), formatWorkspaceTrustStatus(agent.config.workspaceRoot)].join("\n"));

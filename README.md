@@ -79,6 +79,7 @@ Run `grok-code` with no task to enter interactive mode.
 - `/trust`, `/trust-settings`, and `/workspace-trust` view, change, or clear remembered workspace trust settings.
 - `/skills` shows skills loaded for the current interactive baseline separately from skills that are available and loaded only when triggered.
 - `/approval <mode>` changes approval mode during interactive sessions.
+- `/help` shows the focused everyday command set. Compatibility aliases and diagnostic commands still work when typed directly, but are hidden by default to keep the interface quiet.
 
 Useful slash commands:
 
@@ -91,12 +92,7 @@ Useful slash commands:
 /diff
 /approval <mode>
 /learn-project
-/context
-/compact
 /skills
-/tools
-/env
-/bg
 /exit
 ```
 
@@ -247,11 +243,11 @@ Modes:
 
 Global environment changes are never auto-approved except in `auto-all`. Hard-denied commands, such as destructive deletes, shell install pipes, deploys, publishes, and git pushes, remain blocked in every mode.
 
-When approval is required, the prompt is a menu:
+When approval is required, Grok Code shows a focused decision prompt with the operation, request, reason, risk, current policy, scope, and the remembered-rule key when one is available. Patch approvals also summarize the affected files and line counts. The menu options are:
 
-- allow this time
-- allow and remember similar requests for this session
-- no, use another approach
+- yes, allow this time
+- yes, and remember similar requests for this session
+- no, tell the model what to do instead
 
 If you deny and choose another approach, Grok Code asks for guidance and returns that guidance to the model.
 

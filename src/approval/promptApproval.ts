@@ -2,20 +2,25 @@ import { input, select } from "@inquirer/prompts";
 import chalk from "chalk";
 import type { CommandRisk } from "./RiskClassifier.js";
 
+export type ApprovalPromptDetails = {
+  operation?: string;
+  policy?: string;
+  scope?: string;
+  rememberKey?: string;
+  files?: Array<{
+    path: string;
+    operation: "create" | "modify" | "delete";
+    additions: number;
+    deletions: number;
+  }>;
+};
+
 export type ApprovalPromptDecision =
   | { approved: true; rememberSimilar: boolean }
   | { approved: false; rememberSimilar: false; guidance?: string };
 
-export async function promptApproval(command: string, reason: string, risk: CommandRisk): Promise<ApprovalPromptDecision> {
-  console.log(chalk.yellow("Approval required"));
-  console.log(`Command: ${command}`);
-  console.log(`Reason: ${reason}`);
-  console.log(`Risk: ${risk}`);
-  if (risk === "global_environment_change") {
-    console.log("This may modify global tools, shell profiles, PATH, package managers, or system-level runtime state.");
-    console.log("Project-local setup was not sufficient or was not selected by the model.");
-    console.log("Rollback depends on the package manager or file changed.");
-  }
+export async function promptApproval(command: string, reason: string, risk: CommandRisk, details: ApprovalPromptDetails = {}): Promise<ApprovalPromptDecision> {
+  console.log(formatApprovalPrompt(command, reason, risk, details));
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     return {
       approved: false,
@@ -24,20 +29,20 @@ export async function promptApproval(command: string, reason: string, risk: Comm
     };
   }
   const choice = await select({
-    message: "Choose how to handle this request",
+    message: "Approve this operation?",
     choices: [
       {
-        name: "Allow this time",
+        name: "Yes, allow this time",
         value: "allow_once",
-        description: "Run this exact request once."
+        description: "Approve only this exact operation."
       },
       {
-        name: "Allow and remember similar requests",
+        name: "Yes, and remember similar",
         value: "allow_similar",
-        description: "Run this request and auto-approve similar requests in this session."
+        description: "Approve now and auto-approve the displayed operation type in this session."
       },
       {
-        name: "No, use another approach",
+        name: "No, tell the model what to do instead",
         value: "deny_with_guidance",
         description: "Deny this request and tell the model what to try instead."
       }
@@ -50,4 +55,55 @@ export async function promptApproval(command: string, reason: string, risk: Comm
     default: "Use a safer project-local approach that does not require this approval."
   });
   return { approved: false, rememberSimilar: false, guidance };
+}
+
+export function formatApprovalPrompt(command: string, reason: string, risk: CommandRisk, details: ApprovalPromptDetails = {}): string {
+  const lines = [
+    chalk.yellow.bold("Approval required"),
+    `${chalk.bold("Operation:")} ${details.operation ?? riskLabel(risk)}`,
+    `${chalk.bold("Request:")} ${command}`,
+    `${chalk.bold("Reason:")} ${reason}`,
+    `${chalk.bold("Risk:")} ${riskLabel(risk)}`
+  ];
+
+  if (details.scope) lines.push(`${chalk.bold("Scope:")} ${details.scope}`);
+  if (details.policy) lines.push(`${chalk.bold("Policy:")} ${details.policy}`);
+  if (details.rememberKey) lines.push(`${chalk.bold("Remember rule:")} ${details.rememberKey}`);
+
+  const impact = riskImpact(risk);
+  if (impact) lines.push(`${chalk.bold("Impact:")} ${impact}`);
+
+  if (details.files?.length) {
+    lines.push(chalk.bold("Files:"));
+    for (const file of details.files.slice(0, 8)) {
+      lines.push(`  ${file.operation.padEnd(6)} ${file.path} (+${file.additions}/-${file.deletions})`);
+    }
+    if (details.files.length > 8) lines.push(`  ... ${details.files.length - 8} more`);
+  }
+
+  return lines.join("\n");
+}
+
+function riskLabel(risk: CommandRisk): string {
+  return {
+    safe: "safe local operation",
+    ask: "approval-required operation",
+    deny: "blocked operation",
+    global_environment_change: "global environment change",
+    destructive: "destructive operation",
+    network: "network or dependency operation",
+    background: "background process"
+  }[risk];
+}
+
+function riskImpact(risk: CommandRisk): string | undefined {
+  return {
+    safe: undefined,
+    ask: "This is outside the default safe set and needs your decision before it runs.",
+    deny: "This operation is blocked by policy.",
+    destructive: "This may delete or overwrite data and is blocked by policy.",
+    network: "This may download code or modify local dependencies.",
+    background: "This starts a long-running process that may continue until stopped.",
+    global_environment_change: "This may modify global tools, shell profiles, PATH, package managers, or system-level runtime state."
+  }[risk];
 }
