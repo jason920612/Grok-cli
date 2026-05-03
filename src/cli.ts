@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { createXaiClient } from "./api/xaiClient.js";
 import { Agent } from "./agent/Agent.js";
-import { loadConfig, type ApprovalMode, type ToolChoice } from "./config/loadConfig.js";
+import { loadConfig, type ApprovalMode, type SandboxProfile, type ToolChoice } from "./config/loadConfig.js";
 import { startRepl } from "./ui/repl.js";
 import { formatSessionStatus, printHeader } from "./ui/terminal.js";
 import { SessionStore } from "./session/SessionStore.js";
@@ -12,6 +12,7 @@ import { ensureWorkspaceTrusted } from "./ui/workspaceTrust.js";
 type CliOpts = {
   model?: string;
   approval?: ApprovalMode;
+  profile?: SandboxProfile;
   toolChoice?: ToolChoice;
   maxSteps?: string;
   serverTools?: boolean;
@@ -29,6 +30,7 @@ export async function main(): Promise<void> {
     .argument("[task...]", "Task description")
     .option("--model <model>", "Model", "grok-4.3")
     .option("--approval <mode>", "on-request|auto-local|auto-safe|auto-all|never", "on-request")
+    .option("--profile <profile>", "Sandbox profile: default|build|test|debug|package|docs", "default")
     .option("--tool-choice <choice>", "auto|required|none", "auto")
     .option("--max-steps <number>", "Maximum agent steps", "30")
     .option("--no-server-tools", "Disable xAI server-side tools")
@@ -58,6 +60,7 @@ async function makeAgent(opts: CliOpts, task = "", cwd = process.cwd()): Promise
   const config = loadConfig(cwd, {
     model: opts.model,
     approval: opts.approval,
+    sandboxProfile: parseSandboxProfile(opts.profile),
     toolChoice: opts.toolChoice,
     maxSteps: parseMaxSteps(opts.maxSteps),
     serverTools: toolOverrides.serverTools,
@@ -97,6 +100,15 @@ export function parseMaxSteps(value?: string): number | undefined {
     throw new Error("--max-steps must be a positive integer");
   }
   return parsed;
+}
+
+export function parseSandboxProfile(value?: string): SandboxProfile | undefined {
+  if (value === undefined) return undefined;
+  const profiles: SandboxProfile[] = ["default", "build", "test", "debug", "package", "docs"];
+  if (!profiles.includes(value as SandboxProfile)) {
+    throw new Error(`--profile must be one of: ${profiles.join(", ")}`);
+  }
+  return value as SandboxProfile;
 }
 
 async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void> {
@@ -147,6 +159,7 @@ function localSessionStatus(opts: CliOpts): void {
   const config = loadConfig(process.cwd(), {
     model: opts.model,
     approval: opts.approval,
+    sandboxProfile: parseSandboxProfile(opts.profile),
     toolChoice: opts.toolChoice,
     maxSteps: parseMaxSteps(opts.maxSteps),
     serverTools: toolOverrides.serverTools,

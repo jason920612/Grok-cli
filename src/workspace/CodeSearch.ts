@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import fg from "fast-glob";
 import { getFileOverviewContent } from "./FileOverview.js";
-import { createIgnoreRules } from "./IgnoreRules.js";
 import { searchSymbols } from "./SymbolSearch.js";
 import type { WorkspaceSandbox } from "./WorkspaceSandbox.js";
 import type { RelatedFilesResult, SearchTreeResult } from "../tools/searchTreeInterfaces.js";
@@ -113,9 +112,8 @@ export async function getRelatedFiles(sandbox: WorkspaceSandbox, filePath: strin
 }
 
 async function listSearchableFiles(sandbox: WorkspaceSandbox): Promise<string[]> {
-  const ig = createIgnoreRules();
-  const entries = await fg(SOURCE_GLOBS, { cwd: sandbox.root, dot: true, onlyFiles: true });
-  return entries.filter((entry) => !ig.ignores(entry));
+  const entries = await fg(SOURCE_GLOBS, { cwd: sandbox.root, dot: true, onlyFiles: true, ignore: ["**/.git/**", "**/node_modules/**"] });
+  return entries.filter((entry) => !sandbox.isPathDenied(entry, "read"));
 }
 
 function scorePath(rel: string, query: string): number {

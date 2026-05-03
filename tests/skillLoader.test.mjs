@@ -11,7 +11,7 @@ import { ApprovalPolicy, classifyPatchRisk } from "../dist/approval/ApprovalPoli
 import { CORE_SYSTEM_PROMPT } from "../dist/agent/prompts.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { parseResponse } from "../dist/api/responseParser.js";
-import { parseMaxSteps, parseServerToolOverrides } from "../dist/cli.js";
+import { parseMaxSteps, parseSandboxProfile, parseServerToolOverrides } from "../dist/cli.js";
 
 const root = process.cwd();
 const skillPath = path.join(root, "src", "skills", "builtin", "tree-based-code-navigation.md");
@@ -188,4 +188,11 @@ test("CLI max steps parser accepts only positive integers", () => {
   assert.throws(() => parseMaxSteps("-1"), /--max-steps must be a positive integer/);
   assert.throws(() => parseMaxSteps("1.5"), /--max-steps must be a positive integer/);
   assert.throws(() => parseMaxSteps("abc"), /--max-steps must be a positive integer/);
+});
+
+test("CLI sandbox profile parser accepts known profiles only", () => {
+  assert.equal(parseSandboxProfile(undefined), undefined);
+  assert.equal(parseSandboxProfile("default"), "default");
+  assert.equal(parseSandboxProfile("test"), "test");
+  assert.throws(() => parseSandboxProfile("wide-open"), /--profile must be one of/);
 });
