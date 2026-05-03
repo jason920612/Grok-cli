@@ -5,7 +5,7 @@ import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
 import { colorDiff } from "./diffView.js";
 import { readInteractiveLine, runWithEscInterrupt } from "./interactiveInput.js";
-import { SLASH_COMMANDS } from "./slashCommands.js";
+import { visibleSlashCommands } from "./slashCommands.js";
 import type { ApprovalMode } from "../config/loadConfig.js";
 import { formatSessionStatus } from "./terminal.js";
 import { chooseWorkspace, formatWorkspaceTrustStatus, manageWorkspaceTrust } from "./workspaceTrust.js";
@@ -40,7 +40,7 @@ async function handleSlash(command: string, agent: Agent, options: ReplOptions):
   const [name, ...rest] = command.split(/\s+/);
   switch (name) {
     case "/help":
-      console.log(SLASH_COMMANDS.map((cmd) => `${cmd.usage.padEnd(24)} ${cmd.description}`).join("\n"));
+      console.log(visibleSlashCommands().map((cmd) => `${cmd.usage.padEnd(24)} ${cmd.description}`).join("\n"));
       break;
     case "/status":
       console.log([formatSessionStatus(agent.config), formatWorkspaceTrustStatus(agent.config.workspaceRoot)].join("\n"));
@@ -147,12 +147,12 @@ function setApproval(agent: Agent, mode: ApprovalMode): string {
   return `Approval mode set to ${mode}: ${approvalDescription(mode)}`;
 }
 
-function approvalDescription(mode: ApprovalMode): string {
+export function approvalDescription(mode: ApprovalMode): string {
   return {
     "on-request": "Default. Auto-allow workspace file edits and safe local commands; ask for riskier commands.",
     "auto-local": "Auto-allow operations scoped to this workspace/local environment; still asks for global environment changes.",
     "auto-safe": "Auto-allow only safe commands and local patch edits; ask for network/install/unknown commands.",
-    "auto-all": "Auto-allow every model-requested operation, including global or destructive commands.",
+    "auto-all": "Auto-allow model-requested operations except commands that are hard-denied by the safety policy.",
     never: "Deny approval-required operations."
   }[mode];
 }

@@ -10,11 +10,14 @@ import { ToolSkillRegistry } from "../dist/tool-skills/ToolSkillRegistry.js";
 import { LOCAL_TOOL_NAMES, createLocalToolRegistry } from "../dist/tools/definitions/index.js";
 import { ApprovalPolicy, classifyPatchRisk } from "../dist/approval/ApprovalPolicy.js";
 import { classifyCommand } from "../dist/approval/RiskClassifier.js";
+import { formatApprovalPrompt } from "../dist/approval/promptApproval.js";
 import { shouldContinueAfterPlanOnlyResponse } from "../dist/agent/AgentLoop.js";
 import { CORE_SYSTEM_PROMPT } from "../dist/agent/prompts.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { parseResponse } from "../dist/api/responseParser.js";
 import { parseMaxSteps, parseSandboxProfile, parseServerToolOverrides } from "../dist/cli.js";
+import { approvalDescription } from "../dist/ui/repl.js";
+import { SLASH_COMMANDS, visibleSlashCommands } from "../dist/ui/slashCommands.js";
 
 const root = process.cwd();
 const skillPath = path.join(root, "src", "skills", "builtin", "tree-based-code-navigation.md");
@@ -116,6 +119,12 @@ test("approval policy supports local and all automation levels", async () => {
   assert.equal(await never.approvePatch("workspace patch"), false);
 });
 
+test("auto-all approval description preserves hard-deny semantics", () => {
+  const description = approvalDescription("auto-all");
+  assert.match(description, /hard-denied/i);
+  assert.doesNotMatch(description, /destructive commands/i);
+});
+
 test("Windows destructive delete commands are hard-denied", () => {
   assert.equal(classifyCommand("Remove-Item -LiteralPath dist -Recurse -Force"), "deny");
   assert.equal(classifyCommand("Remove-Item -Force -Recurse dist"), "deny");
@@ -161,6 +170,35 @@ test("patch approval classifies higher-risk patch metadata", async () => {
 
   const autoLocal = new ApprovalPolicy("auto-local");
   assert.equal(await autoLocal.approvePatch("package patch", packagePatch), true);
+});
+
+test("approval prompt summarizes decision details without invoking skills", () => {
+  const prompt = formatApprovalPrompt("npm install", "install local dependencies", "network", {
+    operation: "run shell command",
+    policy: "on-request",
+    scope: "workspace shell",
+    rememberKey: "foreground:network:npm install",
+    files: [{ path: "package.json", operation: "modify", additions: 1, deletions: 1 }]
+  });
+
+  assert.match(prompt, /Approval required/);
+  assert.match(prompt, /Operation:.*run shell command/);
+  assert.match(prompt, /Policy:.*on-request/);
+  assert.match(prompt, /Remember rule:.*foreground:network:npm install/);
+  assert.match(prompt, /modify package\.json \(\+1\/-1\)/);
+});
+
+test("help shows a focused slash command set while aliases remain registered", () => {
+  const visible = visibleSlashCommands().map((command) => command.name);
+  const all = SLASH_COMMANDS.map((command) => command.name);
+
+  assert.ok(visible.includes("/help"));
+  assert.ok(visible.includes("/approval"));
+  assert.ok(visible.includes("/skills"));
+  assert.ok(all.includes("/workspace"));
+  assert.equal(visible.includes("/workspace"), false);
+  assert.equal(visible.includes("/tools"), false);
+  assert.equal(visible.includes("/env"), false);
 });
 
 test("system prompt requires plans and final action summaries", () => {

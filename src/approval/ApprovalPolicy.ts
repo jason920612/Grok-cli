@@ -50,7 +50,12 @@ export class ApprovalPolicy {
       return { approved: false, risk, message: "Approval policy is never." };
     }
     if (risk === "safe") return { approved: true, risk };
-    const decision = await promptApproval(command, reason, risk);
+    const decision = await promptApproval(command, reason, risk, {
+      operation: options.background ? "run background command" : "run shell command",
+      policy: this.currentMode,
+      scope: options.background ? "workspace background process" : "workspace shell",
+      rememberKey: key
+    });
     if (decision.approved && decision.rememberSimilar) {
       this.rememberedApprovals.add(key);
     }
@@ -67,7 +72,12 @@ export class ApprovalPolicy {
     if (risk === "safe") return true;
     if (this.currentMode === "auto-safe") return false;
     if (this.currentMode === "auto-local" || this.currentMode === "auto-all") return true;
-    const decision = await promptApproval(formatPatchApprovalCommand(metadata!), reason, "ask");
+    const decision = await promptApproval(formatPatchApprovalCommand(metadata!), reason, "ask", {
+      operation: "apply workspace patch",
+      policy: this.currentMode,
+      scope: "workspace files",
+      files: metadata!.files
+    });
     return decision.approved;
   }
 }
