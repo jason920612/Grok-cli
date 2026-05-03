@@ -182,15 +182,15 @@ function formatActionSummary(actions: ToolActionSummary[]): string {
     .join("\n");
 }
 
-function shouldContinueAfterPlanOnlyResponse(text: string, task: string, actionCount: number): boolean {
+export function shouldContinueAfterPlanOnlyResponse(text: string, task: string, actionCount: number): boolean {
   if (!text.trim()) return false;
   const lower = text.toLowerCase();
   const taskLower = task.toLowerCase();
-  const saysItWillUseTools = /(brief plan|before first tool call|i'?ll now|i will now|proceeding to|run the first tool|call .*tool|use .*tool)/i.test(text);
-  const actionTask = /(commit|push|edit|modify|fix|write|create|delete|run|test|build|review|提交|推送|修改|刪除|创建|建立)/i.test(taskLower);
+  const saysItWillUseTools = /(brief plan|before first tool call|i'?ll now|i will now|proceeding to|run the first tool|call .*tool|use .*tool|工具)/i.test(text);
+  const englishActionTask = /(commit|push|edit|modify|fix|write|create|delete|run|test|build|review|issue|pr)/i.test(taskLower);
+  const localizedActionTask = ["\u4fee bug", "\u4fee\u6539", "\u4fee\u6b63", "\u5efa\u7acb", "\u65b0\u589e", "\u522a\u9664", "\u6267\u884c", "\u57f7\u884c", "\u6e2c\u8a66", "\u6d4b\u8bd5", "\u5efa\u7f6e", "\u63d0\u4ea4", "\u63a8\u9001", "\u5be9\u6838", "\u5ba1\u6838", "\u958bpr", "\u958b issue"].some((keyword) => taskLower.includes(keyword));
   const claimsNoCapability = /no .*tool available|there is no .*tool|tools limited to/i.test(lower);
-  const localizedActionTask = ["提交", "推送", "修改", "修正", "刪除", "创建", "建立"].some((keyword) => taskLower.includes(keyword));
-  return actionCount === 0 && (actionTask || localizedActionTask) && (saysItWillUseTools || claimsNoCapability);
+  return actionCount === 0 && (englishActionTask || localizedActionTask) && (saysItWillUseTools || claimsNoCapability);
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
