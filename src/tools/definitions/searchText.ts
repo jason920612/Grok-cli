@@ -21,22 +21,22 @@ export function searchTextTool(skills: ToolSkillRegistry) {
       const max = args.maxResults ?? 100;
       const base = args.path ?? ".";
       ctx.sandbox.resolvePath(base);
-      const results = await (await commandExists("rg") ? rgSearch(ctx.workspaceRoot, args.query, base, args.glob, max) : nodeSearch(ctx, args.query, base, args.glob, max));
+      const results = await (await commandExists("rg") ? rgSearch(ctx, args.query, base, args.glob, max) : nodeSearch(ctx, args.query, base, args.glob, max));
       ctx.context.add({ type: "search_result", content: `search_text ${args.query}\n${results.map((r) => `${r.path}:${r.line}: ${r.preview}`).join("\n")}`, priority: 55, expiresAfterSteps: 3 });
       return { results };
     }
   );
 }
 
-async function rgSearch(root: string, query: string, base: string, glob: string | undefined, max: number) {
+async function rgSearch(ctx: any, query: string, base: string, glob: string | undefined, max: number) {
   const rgArgs = ["--line-number", "--fixed-strings", "--color", "never", query, base];
   if (glob) rgArgs.splice(0, 0, "--glob", glob);
   try {
-    const { stdout } = await execFileAsync("rg", rgArgs, { cwd: root, timeout: 30_000, maxBuffer: 2_000_000, windowsHide: true });
-    return stdout.split(/\r?\n/).filter(Boolean).slice(0, max).map((line) => {
+    const { stdout } = await execFileAsync("rg", rgArgs, { cwd: ctx.workspaceRoot, timeout: 30_000, maxBuffer: 2_000_000, windowsHide: true });
+    return stdout.split(/\r?\n/).filter(Boolean).map((line) => {
       const [file, lineNo, ...rest] = line.split(":");
       return { path: file ?? "", line: Number(lineNo), preview: rest.join(":").trim() };
-    });
+    }).filter((result) => !ctx.sandbox.isPathDenied(result.path, "read")).slice(0, max);
   } catch (error: any) {
     if (error?.code === 1) return [];
     throw error;
@@ -44,12 +44,12 @@ async function rgSearch(root: string, query: string, base: string, glob: string 
 }
 
 async function nodeSearch(ctx: any, query: string, base: string, glob: string | undefined, max: number) {
-  const ig = createIgnoreRules();
+  const ig = createIgnoreRules(ctx.sandbox.profile);
   const entries = await fg(glob ?? "**/*", { cwd: ctx.sandbox.resolvePath(base), onlyFiles: true, dot: true });
   const results: Array<{ path: string; line: number; preview: string }> = [];
   for (const entry of entries) {
     const rel = base === "." ? entry : `${base}/${entry}`;
-    if (ig.ignores(rel)) continue;
+    if (ig.ignores(rel) || ctx.sandbox.isPathDenied(rel, "read")) continue;
     let text = "";
     try { text = await fs.readFile(ctx.sandbox.assertReadableFile(rel), "utf8"); } catch { continue; }
     text.split(/\r?\n/).forEach((line, index) => {

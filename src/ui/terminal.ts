@@ -12,6 +12,7 @@ export function formatSessionStatus(config: GrokCodeConfig): string {
     `provider:     xAI`,
     `workspace:    ${config.workspaceRoot}`,
     `approval:     ${config.approval}`,
+    `profile:      ${config.sandboxProfile}`,
     `tool choice:  ${config.toolChoice}`,
     `max steps:    ${config.maxSteps}`,
     `web search:   ${config.serverTools && config.enableWebSearch ? "enabled" : "disabled"}`,

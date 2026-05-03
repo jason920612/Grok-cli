@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { applyPatchTool } from "../dist/tools/definitions/applyPatch.js";
+import { runShellTool } from "../dist/tools/definitions/runShell.js";
 import { ApprovalPolicy } from "../dist/approval/ApprovalPolicy.js";
 import { ContextManager } from "../dist/context/ContextManager.js";
 import { WorkspaceSandbox } from "../dist/workspace/WorkspaceSandbox.js";
@@ -42,6 +43,19 @@ test("apply_patch removes files for delete patches", async () => {
   assert.deepEqual(result.modifiedFiles, []);
   assert.deepEqual(result.deletedFiles, ["delete-me.txt"]);
   assert.equal(fs.existsSync(target), false);
+});
+
+test("run_shell allows newly generated output directories for the session", async () => {
+  const root = makeWorkspace();
+  const tool = runShellTool(new ToolSkillRegistry(root));
+  const ctx = makeContext(root);
+
+  await tool.execute({
+    command: "node -e \"const fs=require('fs');fs.mkdirSync('coverage',{recursive:true});fs.writeFileSync('coverage/report.txt','ok')\"",
+    reason: "create a generated test report"
+  }, ctx);
+
+  assert.equal(path.basename(ctx.sandbox.assertReadableFile("coverage/report.txt")), "report.txt");
 });
 
 function makeWorkspace() {

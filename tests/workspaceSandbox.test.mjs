@@ -32,7 +32,7 @@ test("readable symlinks cannot bypass denied workspace paths", (t) => {
   }
 
   const sandbox = new WorkspaceSandbox(root);
-  assert.throws(() => sandbox.assertReadableFile("safe-link.txt"), /Path is denied by sandbox: \.env/);
+  assert.throws(() => sandbox.assertReadableFile("safe-link.txt"), /sensitive-path-denied/);
 });
 
 test(".env.example is readable while real env files stay denied", () => {
@@ -49,12 +49,50 @@ test(".env.example is readable while real env files stay denied", () => {
   assert.equal(isDeniedPath(".env.example"), false);
   assert.equal(isDeniedPath("sub/.env.example"), false);
   assert.equal(isDeniedPath("sub/.env"), true);
+  assert.equal(isDeniedPath("secrets/token.txt"), true);
+  assert.equal(isDeniedPath("certs/private.pem"), true);
   assert.equal(path.basename(sandbox.assertReadableFile(".env.example")), ".env.example");
   assert.equal(path.basename(sandbox.assertReadableFile("sub/.env.example")), ".env.example");
-  assert.throws(() => sandbox.assertReadableFile(".env"), /Path is denied by sandbox: \.env/);
-  assert.throws(() => sandbox.assertReadableFile(".env.local"), /Path is denied by sandbox: \.env\.local/);
-  assert.throws(() => sandbox.assertReadableFile("sub/.env"), /Path is denied by sandbox: sub\/\.env/);
-  assert.throws(() => sandbox.assertReadableFile("sub/.env.local"), /Path is denied by sandbox: sub\/\.env\.local/);
+  assert.throws(() => sandbox.assertReadableFile(".env"), /sensitive-path-denied/);
+  assert.throws(() => sandbox.assertReadableFile(".env.local"), /sensitive-path-denied/);
+  assert.throws(() => sandbox.assertReadableFile("sub/.env"), /sensitive-path-denied/);
+  assert.throws(() => sandbox.assertReadableFile("sub/.env.local"), /sensitive-path-denied/);
+});
+
+test("generated outputs are denied by default with actionable errors", () => {
+  const { root } = makeWorkspace();
+  fs.mkdirSync(path.join(root, "coverage"));
+  fs.writeFileSync(path.join(root, "coverage", "index.html"), "report");
+
+  const sandbox = new WorkspaceSandbox(root);
+  assert.equal(isDeniedPath("coverage/index.html"), true);
+  assert.throws(
+    () => sandbox.assertReadableFile("coverage/index.html"),
+    /Blocked by sandbox rule: generated-output-read-denied[\s\S]*Suggested profile: test/
+  );
+});
+
+test("sandbox profiles allow generated output reads while keeping secrets denied", () => {
+  const { root } = makeWorkspace();
+  fs.mkdirSync(path.join(root, "coverage"));
+  fs.writeFileSync(path.join(root, "coverage", "index.html"), "report");
+  fs.writeFileSync(path.join(root, "coverage", ".env"), "SECRET=value");
+
+  const sandbox = new WorkspaceSandbox(root, "test");
+  assert.equal(isDeniedPath("coverage/index.html", "test"), false);
+  assert.equal(path.basename(sandbox.assertReadableFile("coverage/index.html")), "index.html");
+  assert.throws(() => sandbox.assertReadableFile("coverage/.env"), /sensitive-path-denied/);
+});
+
+test("generated output directories can be allowed for the current session", () => {
+  const { root } = makeWorkspace();
+  fs.mkdirSync(path.join(root, "dist"));
+  fs.writeFileSync(path.join(root, "dist", "summary.txt"), "ok");
+
+  const sandbox = new WorkspaceSandbox(root);
+  assert.throws(() => sandbox.assertReadableFile("dist/summary.txt"), /generated-output-read-denied/);
+  sandbox.allowGeneratedOutputPath("dist");
+  assert.equal(path.basename(sandbox.assertReadableFile("dist/summary.txt")), "summary.txt");
 });
 
 test("writable patch paths reject symlink path components", (t) => {

@@ -16,9 +16,12 @@ export function listFilesTool(skills: ToolSkillRegistry) {
       const base = args.path ?? ".";
       ctx.sandbox.resolvePath(base);
       const pattern = args.glob ?? "**/*";
-      const ig = createIgnoreRules();
+      const ig = createIgnoreRules(ctx.sandbox.profile);
       const entries = await fg(pattern, { cwd: ctx.sandbox.resolvePath(base), dot: true, onlyFiles: true });
-      const files = entries.map((entry) => (base === "." ? entry : `${base.replace(/\\/g, "/")}/${entry}`)).filter((entry) => !ig.ignores(entry)).slice(0, args.maxResults ?? 200);
+      const files = entries
+        .map((entry) => (base === "." ? entry : `${base.replace(/\\/g, "/")}/${entry}`))
+        .filter((entry) => !ig.ignores(entry) && !ctx.sandbox.isPathDenied(entry, "read"))
+        .slice(0, args.maxResults ?? 200);
       ctx.context.add({ type: "search_result", content: `list_files ${base} ${pattern}\n${files.join("\n")}`, priority: 45, expiresAfterSteps: 3 });
       return { files, truncated: entries.length > files.length };
     }

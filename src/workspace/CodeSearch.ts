@@ -113,9 +113,9 @@ export async function getRelatedFiles(sandbox: WorkspaceSandbox, filePath: strin
 }
 
 async function listSearchableFiles(sandbox: WorkspaceSandbox): Promise<string[]> {
-  const ig = createIgnoreRules();
+  const ig = createIgnoreRules(sandbox.profile);
   const entries = await fg(SOURCE_GLOBS, { cwd: sandbox.root, dot: true, onlyFiles: true });
-  return entries.filter((entry) => !ig.ignores(entry));
+  return entries.filter((entry) => !ig.ignores(entry) && !sandbox.isPathDenied(entry, "read"));
 }
 
 function scorePath(rel: string, query: string): number {

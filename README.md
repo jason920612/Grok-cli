@@ -58,6 +58,7 @@ Global flags:
 ```bash
 --model <model>
 --approval <on-request|auto-local|auto-safe|auto-all|never>
+--profile <default|build|test|debug|package|docs>
 --tool-choice <auto|required|none>
 --max-steps <number>
 --no-server-tools
@@ -256,7 +257,18 @@ If you deny and choose another approach, Grok Code asks for guidance and returns
 
 ## Sandbox Limitations
 
-Local tools can only read and write inside the workspace root. The sandbox rejects `.git` internals, `node_modules`, build outputs, coverage, minified generated files, binary files, and `.env` secrets unless explicitly necessary and allowed by tool policy.
+Local tools can only read and write inside the workspace root. The sandbox always rejects sensitive paths such as `.git` internals, `node_modules`, `.env` secrets, credentials, private keys, minified generated files, and binary files.
+
+Sandbox profiles allow read access to common generated outputs for task-specific workflows while keeping sensitive paths hard-denied:
+
+- `default`: source-oriented access; generated outputs stay denied.
+- `build`: allows common build outputs such as `build`, `dist`, `out`, `target`, `.next`, and generated source directories.
+- `test`: allows test reports and coverage directories such as `coverage`, `reports`, `test-results`, `junit`, and `.nyc_output`.
+- `debug`: allows common logs, reports, temp directories, and build/test outputs needed for diagnosis.
+- `package`: allows package/artifact output directories such as `dist`, `build`, `out`, `target`, and `artifacts`.
+- `docs`: allows common generated docs output directories.
+
+Approved shell commands that create a common generated output directory during the current session also make that directory readable for the remainder of the session. Sandbox block errors include the blocking rule, path, operation, active profile, and suggested profile when applicable.
 
 ## Examples
 
@@ -264,6 +276,12 @@ Fix failing tests:
 
 ```bash
 grok-code --approval auto-safe "fix the failing unit test"
+```
+
+Build and inspect generated output:
+
+```bash
+grok-code --approval auto-local --profile build "build the project and summarize any failures"
 ```
 
 Review a diff:
