@@ -20,7 +20,7 @@ export class Agent {
   readonly skillLoader: SkillLoader;
 
   constructor(private readonly client: OpenAI, readonly config: GrokCodeConfig, originalTask = "") {
-    this.sandbox = new WorkspaceSandbox(config.workspaceRoot, config.sandboxProfile);
+    this.sandbox = new WorkspaceSandbox(config.workspaceRoot, config.sandboxProfile, config.workspaceTrusted);
     this.approval = new ApprovalPolicy(config.approval, originalTask);
     this.toolSkills = new ToolSkillRegistry(config.workspaceRoot);
     this.toolSkills.loadBuiltin(LOCAL_TOOL_NAMES);

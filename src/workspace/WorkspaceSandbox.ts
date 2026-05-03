@@ -9,11 +9,13 @@ type SandboxRule = "allowed" | "sensitive-path-denied" | "generated-output-read-
 export class WorkspaceSandbox {
   readonly root: string;
   readonly profile: SandboxProfile;
+  readonly trusted: boolean;
   private readonly sessionAllowedGeneratedRoots = new Set<string>();
 
-  constructor(root: string, profile: SandboxProfile = "default") {
+  constructor(root: string, profile: SandboxProfile = "default", trusted = false) {
     this.root = fs.realpathSync(root);
     this.profile = profile;
+    this.trusted = trusted;
   }
 
   resolvePath(inputPath = "."): string {
@@ -66,6 +68,7 @@ export class WorkspaceSandbox {
     if (isSensitivePath(normalized)) return { rule: "sensitive-path-denied" };
     const generatedRoot = generatedOutputRoot(normalized);
     if (!generatedRoot) return { rule: "allowed" };
+    if (this.trusted) return { rule: "allowed" };
     if (operation === "patch") return { rule: "generated-output-patch-denied", suggestedProfile: suggestedProfileForGeneratedRoot(generatedRoot) };
     if (generatedOutputDirsForProfile(this.profile).includes(generatedRoot)) return { rule: "allowed" };
     if (this.isSessionAllowedGeneratedPath(normalized)) return { rule: "allowed" };
@@ -94,11 +97,12 @@ export class WorkspaceSandbox {
   }
 }
 
-export function isDeniedPath(relPath: string, profile: SandboxProfile = "default", operation: SandboxOperation = "read"): boolean {
+export function isDeniedPath(relPath: string, profile: SandboxProfile = "default", operation: SandboxOperation = "read", trusted = false): boolean {
   const normalized = normalizeRel(relPath);
   if (isSensitivePath(normalized)) return true;
   const root = generatedOutputRoot(normalized);
   if (!root) return false;
+  if (trusted) return false;
   if (operation === "patch") return true;
   return !generatedOutputDirsForProfile(profile).includes(root);
 }

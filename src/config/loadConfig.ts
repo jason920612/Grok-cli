@@ -16,6 +16,7 @@ export type GrokCodeConfig = {
   enableXSearch: boolean;
   workspaceRoot: string;
   sandboxProfile: SandboxProfile;
+  workspaceTrusted: boolean;
 };
 
 export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfig> = {}): GrokCodeConfig {
@@ -32,6 +33,7 @@ export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfi
     enableXSearch: true,
     workspaceRoot: cwd,
     sandboxProfile: "default",
+    workspaceTrusted: false,
     ...projectConfig,
     ...cleanOverrides
   };
