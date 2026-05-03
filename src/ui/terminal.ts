@@ -11,6 +11,7 @@ export function formatSessionStatus(config: GrokCodeConfig): string {
     `model:        ${config.model}`,
     `provider:     xAI`,
     `workspace:    ${config.workspaceRoot}`,
+    `trusted:      ${config.workspaceTrusted ? "yes" : "no"}`,
     `approval:     ${config.approval}`,
     `profile:      ${config.sandboxProfile}`,
     `tool choice:  ${config.toolChoice}`,

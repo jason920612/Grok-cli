@@ -259,7 +259,9 @@ If you deny and choose another approach, Grok Code asks for guidance and returns
 
 Local tools can only read and write inside the workspace root. The sandbox always rejects sensitive paths such as `.git` internals, `node_modules`, `.env` secrets, credentials, private keys, minified generated files, and binary files.
 
-Sandbox profiles allow read access to common generated outputs for task-specific workflows while keeping sensitive paths hard-denied:
+Workspace trust is the user's permission boundary for local workspace operations. Once a directory is trusted through the interactive trust prompt or `/trust`, normal local operations inside that trusted workspace are allowed, including reading and patching generated outputs such as `dist`, `build`, `coverage`, and `reports`. Trust does not bypass hard-denied sensitive paths.
+
+For untrusted workspaces, sandbox profiles allow read access to common generated outputs for task-specific workflows while keeping sensitive paths hard-denied:
 
 - `default`: source-oriented access; generated outputs stay denied.
 - `build`: allows common build outputs such as `build`, `dist`, `out`, `target`, `.next`, and generated source directories.

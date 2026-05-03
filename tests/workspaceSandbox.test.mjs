@@ -95,6 +95,19 @@ test("generated output directories can be allowed for the current session", () =
   assert.equal(path.basename(sandbox.assertReadableFile("dist/summary.txt")), "summary.txt");
 });
 
+test("trusted workspaces allow local generated output operations", () => {
+  const { root } = makeWorkspace();
+  fs.mkdirSync(path.join(root, "dist"));
+  fs.writeFileSync(path.join(root, "dist", "summary.txt"), "ok");
+  fs.writeFileSync(path.join(root, "dist", ".env"), "SECRET=value");
+
+  const sandbox = new WorkspaceSandbox(root, "default", true);
+  assert.equal(isDeniedPath("dist/summary.txt", "default", "read", true), false);
+  assert.equal(path.basename(sandbox.assertReadableFile("dist/summary.txt")), "summary.txt");
+  assert.equal(sandbox.assertWritablePatchPath("dist/summary.txt"), path.join(root, "dist", "summary.txt"));
+  assert.throws(() => sandbox.assertReadableFile("dist/.env"), /sensitive-path-denied/);
+});
+
 test("writable patch paths reject symlink path components", (t) => {
   const { root, outside } = makeWorkspace();
   const linkPath = path.join(root, "linked-dir");

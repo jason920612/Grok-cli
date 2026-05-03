@@ -8,6 +8,7 @@ import { SessionStore } from "./session/SessionStore.js";
 import { colorDiff } from "./ui/diffView.js";
 import { PROJECT_UNDERSTANDING_TASK } from "./agent/projectUnderstandingTask.js";
 import { ensureWorkspaceTrusted } from "./ui/workspaceTrust.js";
+import { WorkspaceTrustStore } from "./workspace/WorkspaceTrustStore.js";
 
 type CliOpts = {
   model?: string;
@@ -57,10 +58,12 @@ export async function main(): Promise<void> {
 
 async function makeAgent(opts: CliOpts, task = "", cwd = process.cwd()): Promise<Agent> {
   const toolOverrides = parseServerToolOverrides(process.argv.slice(2));
+  const workspaceTrusted = Boolean(new WorkspaceTrustStore().getTrustFor(cwd));
   const config = loadConfig(cwd, {
     model: opts.model,
     approval: opts.approval,
     sandboxProfile: parseSandboxProfile(opts.profile),
+    workspaceTrusted,
     toolChoice: opts.toolChoice,
     maxSteps: parseMaxSteps(opts.maxSteps),
     serverTools: toolOverrides.serverTools,
@@ -160,6 +163,7 @@ function localSessionStatus(opts: CliOpts): void {
     model: opts.model,
     approval: opts.approval,
     sandboxProfile: parseSandboxProfile(opts.profile),
+    workspaceTrusted: Boolean(new WorkspaceTrustStore().getTrustFor(process.cwd())),
     toolChoice: opts.toolChoice,
     maxSteps: parseMaxSteps(opts.maxSteps),
     serverTools: toolOverrides.serverTools,
