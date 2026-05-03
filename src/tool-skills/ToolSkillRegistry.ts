@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ToolSkill } from "./ToolSkill.js";
 import { tokenEstimate } from "../context/tokenEstimate.js";
+import { resolvePackageRoot } from "../packageRoot.js";
+
+const PACKAGE_ROOT = resolvePackageRoot(import.meta.url);
 
 export class ToolSkillRegistry {
   private skills = new Map<string, ToolSkill>();
@@ -10,7 +13,7 @@ export class ToolSkillRegistry {
 
   loadBuiltin(toolNames: string[]): void {
     for (const toolName of toolNames) {
-      const file = path.join(this.root, "src", "tool-skills", "builtin", `${toolName}.skill.md`);
+      const file = path.join(PACKAGE_ROOT, "src", "tool-skills", "builtin", `${toolName}.skill.md`);
       const full = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : defaultFull(toolName);
       this.skills.set(toolName, makeSkill(toolName, full));
     }

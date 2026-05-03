@@ -2,12 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Skill } from "./Skill.js";
 import { tokenEstimate } from "../context/tokenEstimate.js";
+import { resolvePackageRoot } from "../packageRoot.js";
+
+const PACKAGE_ROOT = resolvePackageRoot(import.meta.url);
 
 export class SkillLoader {
   constructor(private readonly workspaceRoot: string) {}
 
   loadAll(): Skill[] {
-    const builtins = this.loadDir(path.join(this.workspaceRoot, "src", "skills", "builtin"), true);
+    const builtins = this.loadDir(path.join(PACKAGE_ROOT, "src", "skills", "builtin"), true);
     const project = this.loadProjectSkills();
     return [...builtins, ...project];
   }
@@ -22,7 +25,7 @@ export class SkillLoader {
       || forcedSkillIds.includes(skill.id)
       || skill.triggers.some((trigger) => lower.includes(trigger))
     );
-    if (/(run|test|build|install|lint|dev|server|command)/i.test(task)) {
+    if (/(run|test|build|install|lint|dev|server|command)/i.test(task) || includesAny(task, ["\u57f7\u884c", "\u6e2c\u8a66", "\u6d4b\u8bd5", "\u5efa\u7f6e", "\u5b89\u88dd"])) {
       const env = all.find((skill) => skill.id === "environment-awareness");
       if (env && !selected.includes(env)) selected.push(env);
     }
@@ -74,15 +77,15 @@ function priorityFor(id: string): number {
 }
 
 function triggersFor(id: string): string[] {
-  return {
+  const triggers: Record<string, string[]> = {
     "code-navigation": ["find", "where", "read", "search", "symbol", "file"],
-    "patch-editing": ["edit", "fix", "change", "modify", "implement", "refactor"],
-    debugging: ["debug", "error", "failed", "exception", "stack"],
-    "test-driven-fix": ["test", "failing", "regression"],
-    "shell-usage": ["command", "shell", "run", "build", "lint"],
-    "environment-awareness": ["environment", "install", "setup", "build", "test", "dev"],
-    "git-commit-push": ["commit", "push", "git commit", "git push", "write commit", "提交", "推送"],
-    "project-local-setup": ["install", "setup", "dependency", "tooling"],
+    "patch-editing": ["edit", "fix", "change", "modify", "implement", "refactor", "\u4fee\u6539", "\u4fee\u6b63"],
+    debugging: ["debug", "error", "failed", "exception", "stack", "\u9664\u932f", "\u9519\u8bef"],
+    "test-driven-fix": ["test", "failing", "regression", "\u6e2c\u8a66", "\u6d4b\u8bd5"],
+    "shell-usage": ["command", "shell", "run", "build", "lint", "\u57f7\u884c", "\u6267\u884c", "\u5efa\u7f6e"],
+    "environment-awareness": ["environment", "install", "setup", "build", "test", "dev", "\u74b0\u5883", "\u5b89\u88dd"],
+    "git-commit-push": ["commit", "push", "git commit", "git push", "write commit", "\u63d0\u4ea4", "\u63a8\u9001", "\u9001\u51fa", "\u958bpr", "\u958b pr"],
+    "project-local-setup": ["install", "setup", "dependency", "tooling", "\u5b89\u88dd", "\u8a2d\u5b9a"],
     "project-understanding": ["project-understanding"],
     "tree-based-code-navigation": [
       "codebase",
@@ -101,9 +104,17 @@ function triggersFor(id: string): string[] {
       "fix",
       "change",
       "feature",
-      "review"
+      "review",
+      "\u4fee\u6539",
+      "\u4fee\u6b63",
+      "\u529f\u80fd"
     ]
-  }[id] ?? [id];
+  };
+  return triggers[id] ?? [id];
+}
+
+function includesAny(value: string, needles: string[]): boolean {
+  return needles.some((needle) => value.includes(needle));
 }
 
 function forcedSkills(task: string): string[] {

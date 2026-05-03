@@ -6,6 +6,11 @@
   "bin": {
     "grok-code": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "src/skills/builtin",
+    "src/tool-skills/builtin"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { SkillLoader } from "../dist/skills/SkillLoader.js";
 import { ContextManager } from "../dist/context/ContextManager.js";
@@ -8,6 +9,8 @@ import { buildModelInput } from "../dist/agent/modelInputBuilder.js";
 import { ToolSkillRegistry } from "../dist/tool-skills/ToolSkillRegistry.js";
 import { LOCAL_TOOL_NAMES, createLocalToolRegistry } from "../dist/tools/definitions/index.js";
 import { ApprovalPolicy, classifyPatchRisk } from "../dist/approval/ApprovalPolicy.js";
+import { classifyCommand } from "../dist/approval/RiskClassifier.js";
+import { shouldContinueAfterPlanOnlyResponse } from "../dist/agent/AgentLoop.js";
 import { CORE_SYSTEM_PROMPT } from "../dist/agent/prompts.js";
 import { loadConfig } from "../dist/config/loadConfig.js";
 import { parseResponse } from "../dist/api/responseParser.js";
@@ -26,6 +29,23 @@ test("tree-based code navigation skill file exists and loads", () => {
   assert.match(skill.content, /Expand only high-confidence nodes/);
 });
 
+test("built-in skills load when target workspace is not the package checkout", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "grok-external-workspace-"));
+  const loader = new SkillLoader(workspace);
+  const skill = loader.loadAll().find((item) => item.id === "tree-based-code-navigation");
+  assert.ok(skill);
+  assert.match(skill.content, /Search before reading/);
+});
+
+test("built-in tool skills load when target workspace is not the package checkout", () => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "grok-external-workspace-"));
+  const toolSkills = new ToolSkillRegistry(workspace);
+  toolSkills.loadBuiltin(["read_file_range"]);
+  const skill = toolSkills.get("read_file_range");
+  assert.match(skill.full, /Read precise file ranges/);
+  assert.doesNotMatch(skill.full, /Use read_file_range carefully with narrow scope/);
+});
+
 test("coding tasks select tree-based code navigation", () => {
   const loader = new SkillLoader(root);
   const selected = loader.select("debug a failing test with a stack trace and modify code");
@@ -34,7 +54,7 @@ test("coding tasks select tree-based code navigation", () => {
 
 test("commit and push tasks select git workflow skill", () => {
   const loader = new SkillLoader(root);
-  const selected = loader.select("幫我寫commit並push");
+  const selected = loader.select("write commit and push");
   assert.ok(selected.some((skill) => skill.id === "git-commit-push"));
 });
 
@@ -94,6 +114,34 @@ test("approval policy supports local and all automation levels", async () => {
 
   const never = new ApprovalPolicy("never");
   assert.equal(await never.approvePatch("workspace patch"), false);
+});
+
+test("Windows destructive delete commands are hard-denied", () => {
+  assert.equal(classifyCommand("Remove-Item -LiteralPath dist -Recurse -Force"), "deny");
+  assert.equal(classifyCommand("Remove-Item -Force -Recurse dist"), "deny");
+  assert.equal(classifyCommand("Remove-Item -r -f dist"), "deny");
+  assert.equal(classifyCommand("del /s /q dist"), "deny");
+  assert.equal(classifyCommand("rmdir /s /q dist"), "deny");
+  assert.equal(classifyCommand("rd /q /s dist"), "deny");
+});
+
+test("plan-only retry detection handles Chinese action tasks", () => {
+  assert.equal(
+    shouldContinueAfterPlanOnlyResponse("\u6211\u6703\u5148\u7528\u5de5\u5177\u6aa2\u67e5\uff0c\u63a5\u8457\u4fee\u6539\u3002", "\u8acb\u4fee bug \u4e26\u57f7\u884c\u6e2c\u8a66", 0),
+    true
+  );
+  assert.equal(
+    shouldContinueAfterPlanOnlyResponse("\u6211\u53ef\u4ee5\u63d0\u4f9b\u4e00\u4e9b\u5efa\u8b70\u3002", "\u8acb\u4fee bug", 1),
+    false
+  );
+  assert.equal(
+    shouldContinueAfterPlanOnlyResponse("I will use tools to inspect the project.", "explain the project structure", 0),
+    false
+  );
+  assert.equal(
+    shouldContinueAfterPlanOnlyResponse("I will use tools to inspect the issue.", "open pr for the fix", 0),
+    true
+  );
 });
 
 test("patch approval classifies higher-risk patch metadata", async () => {
