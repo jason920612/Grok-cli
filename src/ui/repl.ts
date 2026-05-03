@@ -4,7 +4,7 @@ import type { Agent } from "../agent/Agent.js";
 import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
 import { colorDiff } from "./diffView.js";
-import { readInteractiveLine, runWithEscInterrupt } from "./interactiveInput.js";
+import { readInteractiveLine, runWithEscInterrupt, type TranscriptEntry } from "./interactiveInput.js";
 import { visibleSlashCommands } from "./slashCommands.js";
 import type { ApprovalMode } from "../config/loadConfig.js";
 import { formatSessionStatus } from "./terminal.js";
@@ -16,109 +16,123 @@ type ReplOptions = {
 
 export async function startRepl(initialAgent: Agent, options: ReplOptions = {}): Promise<Agent> {
   let agent = initialAgent;
-  console.log(chalk.dim("Type /help for commands, /exit to quit."));
+  const transcript: TranscriptEntry[] = [{ role: "system", content: "Type /help for commands, /exit to quit." }];
   for (;;) {
-    const line = await readInteractiveLine("grok-code>");
+    const line = await readInteractiveLine("grok-code>", { transcript });
     const text = line.trim();
     if (!text) continue;
     if (text === "/exit") break;
+    remember(transcript, "user", text);
     if (text.startsWith("/")) {
-      const nextAgent = await handleSlash(text, agent, options);
+      const nextAgent = await handleSlash(text, agent, options, (content) => remember(transcript, "system", content));
       if (nextAgent) agent = nextAgent;
       continue;
     }
     try {
-      console.log(await runWithEscInterrupt((signal) => agent.run(text, false, signal)));
+      const response = await runWithEscInterrupt((signal) => agent.run(text, false, signal));
+      remember(transcript, "assistant", String(response));
+      console.log(response);
     } catch (error) {
-      console.log(chalk.yellow(error instanceof Error ? error.message : String(error)));
+      const message = error instanceof Error ? error.message : String(error);
+      remember(transcript, "system", message);
+      console.log(chalk.yellow(message));
     }
   }
   return agent;
 }
 
-async function handleSlash(command: string, agent: Agent, options: ReplOptions): Promise<Agent | void> {
+async function handleSlash(command: string, agent: Agent, options: ReplOptions, emit: (content: string) => void): Promise<Agent | void> {
   const [name, ...rest] = command.split(/\s+/);
+  const output = (content: string) => {
+    emit(content);
+    console.log(content);
+  };
   switch (name) {
     case "/help":
-      console.log(visibleSlashCommands().map((cmd) => `${cmd.usage.padEnd(24)} ${cmd.description}`).join("\n"));
+      output(visibleSlashCommands().map((cmd) => `${cmd.usage.padEnd(24)} ${cmd.description}`).join("\n"));
       break;
     case "/status":
-      console.log([formatSessionStatus(agent.config), formatWorkspaceTrustStatus(agent.config.workspaceRoot)].join("\n"));
+      output([formatSessionStatus(agent.config), formatWorkspaceTrustStatus(agent.config.workspaceRoot)].join("\n"));
       break;
     case "/cd":
     case "/workspace":
     case "/change-dir": {
       if (!options.switchWorkspace) {
-        console.log("Workspace switching is unavailable in this session.");
+        output("Workspace switching is unavailable in this session.");
         break;
       }
       const workspace = await chooseWorkspace(agent.config.workspaceRoot);
       if (!workspace) {
-        console.log("Workspace unchanged.");
+        output("Workspace unchanged.");
         break;
       }
       await agent.background.stopAll("workspace switch cleanup");
       const nextAgent = await options.switchWorkspace(workspace);
-      console.log(`Workspace switched to ${nextAgent.config.workspaceRoot}`);
+      output(`Workspace switched to ${nextAgent.config.workspaceRoot}`);
       return nextAgent;
     }
     case "/trust":
     case "/trust-settings":
     case "/workspace-trust":
-      console.log(await manageWorkspaceTrust(agent.config.workspaceRoot));
+      output(await manageWorkspaceTrust(agent.config.workspaceRoot));
       break;
     case "/git-status":
-      console.log(JSON.stringify(await agent.tools.execute("git_status", {}, agent.toolContext()), null, 2));
+      output(JSON.stringify(await agent.tools.execute("git_status", {}, agent.toolContext()), null, 2));
       break;
     case "/diff":
-      console.log(formatDiffResult(await agent.tools.execute("git_diff", {}, agent.toolContext())));
+      output(formatDiffResult(await agent.tools.execute("git_diff", {}, agent.toolContext())));
       break;
     case "/approval":
-      console.log(await chooseApproval(agent, rest[0]));
+      output(await chooseApproval(agent, rest[0]));
       break;
     case "/context":
-      console.log(formatContext(agent.context.list()));
+      output(formatContext(agent.context.list()));
       break;
     case "/compact":
-      console.log(agent.context.compactContext("interactive session").content);
+      output(agent.context.compactContext("interactive session").content);
       break;
     case "/learn-project":
-      console.log(await runWithEscInterrupt((signal) => agent.run(PROJECT_UNDERSTANDING_TASK, false, signal)));
+      output(await runWithEscInterrupt((signal) => agent.run(PROJECT_UNDERSTANDING_TASK, false, signal)));
       break;
     case "/skills":
-      console.log(formatSkills(agent));
+      output(formatSkills(agent));
       break;
     case "/tools":
-      console.log(agent.toolSkills.toolIndex());
+      output(agent.toolSkills.toolIndex());
       break;
     case "/env":
-      console.log(JSON.stringify(await agent.tools.execute("inspect_environment", { includeVersions: true }, agent.toolContext()), null, 2));
+      output(JSON.stringify(await agent.tools.execute("inspect_environment", { includeVersions: true }, agent.toolContext()), null, 2));
       break;
     case "/bg":
-      console.log(JSON.stringify(agent.background.list(), null, 2));
+      output(JSON.stringify(agent.background.list(), null, 2));
       break;
     case "/bg-stop":
-      console.log(JSON.stringify(await agent.tools.execute("stop_background_command", { id: rest[0], reason: "user slash command" }, agent.toolContext()), null, 2));
+      output(JSON.stringify(await agent.tools.execute("stop_background_command", { id: rest[0], reason: "user slash command" }, agent.toolContext()), null, 2));
       break;
     case "/bg-stop-all":
-      console.log(JSON.stringify(await agent.tools.execute("stop_all_background_commands", { reason: "user slash command" }, agent.toolContext()), null, 2));
+      output(JSON.stringify(await agent.tools.execute("stop_all_background_commands", { reason: "user slash command" }, agent.toolContext()), null, 2));
       break;
     case "/drop":
-      console.log(agent.context.drop(rest[0] ?? "") ? "dropped" : "not dropped");
+      output(agent.context.drop(rest[0] ?? "") ? "dropped" : "not dropped");
       break;
     case "/clear":
       agent.context.compactContext("cleared interactive context");
-      console.log("context compacted");
+      output("context compacted");
       break;
     case "/resume":
-      console.log("Use `grok-code resume [session-id]` from the shell.");
+      output("Use `grok-code resume [session-id]` from the shell.");
       break;
     case "/model":
-      console.log("Model changes apply to new CLI invocations in this MVP.");
+      output("Model changes apply to new CLI invocations in this MVP.");
       break;
     default:
-      console.log(`Unknown command: ${name}`);
+      output(`Unknown command: ${name}`);
   }
+}
+
+function remember(transcript: TranscriptEntry[], role: TranscriptEntry["role"], content: string): void {
+  transcript.push({ role, content });
+  if (transcript.length > 40) transcript.splice(0, transcript.length - 40);
 }
 
 async function chooseApproval(agent: Agent, requestedMode?: string): Promise<string> {

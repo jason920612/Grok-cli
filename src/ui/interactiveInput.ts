@@ -1,9 +1,19 @@
 import readline from "node:readline";
 import chalk from "chalk";
 import { input } from "@inquirer/prompts";
-import { SLASH_COMMANDS } from "./slashCommands.js";
+import { visibleSlashCommands } from "./slashCommands.js";
+import type { SlashCommand } from "./slashCommands.js";
 
-export async function readInteractiveLine(prompt = "grok-code>"): Promise<string> {
+export type TranscriptEntry = {
+  role: "user" | "assistant" | "system";
+  content: string;
+};
+
+export type InteractiveLineOptions = {
+  transcript?: TranscriptEntry[];
+};
+
+export async function readInteractiveLine(prompt = "grok-code>", options: InteractiveLineOptions = {}): Promise<string> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     return input({ message: prompt });
   }
@@ -18,10 +28,10 @@ export async function readInteractiveLine(prompt = "grok-code>"): Promise<string
     let selected = 0;
 
     const cleanup = (value: string) => {
-      clearPromptAndMenu();
+      clearLayout();
       process.stdin.off("keypress", onKeypress);
+      process.stdout.off("resize", render);
       process.stdin.setRawMode(wasRaw);
-      process.stdout.write(`${chalk.green(prompt)} ${value}\n`);
       resolve(value);
     };
 
@@ -29,31 +39,41 @@ export async function readInteractiveLine(prompt = "grok-code>"): Promise<string
       if (!buffer.startsWith("/")) return [];
       const [commandPart] = buffer.split(/\s+/, 1);
       const needle = commandPart.toLowerCase();
-      return SLASH_COMMANDS.filter((cmd) => cmd.name.startsWith(needle)).slice(0, 10);
+      return visibleSlashCommands().filter((cmd) => cmd.name.startsWith(needle)).slice(0, 8);
     };
 
-    const clearPromptAndMenu = () => {
-      readline.cursorTo(process.stdout, 0);
-      readline.clearLine(process.stdout, 0);
+    const clearLayout = () => {
+      readline.cursorTo(process.stdout, 0, 0);
       readline.clearScreenDown(process.stdout);
     };
 
+    const moveCursorToInput = () => {
+      const rows = process.stdout.rows ?? 24;
+      const cols = process.stdout.columns ?? 80;
+      const suggestionLines = matches().length > 0 ? matches().length + 1 : 0;
+      const transcriptHeight = Math.max(4, rows - suggestionLines - 5);
+      const inputRow = Math.min(rows - 1, transcriptHeight + 2);
+      readline.cursorTo(process.stdout, Math.min(`${prompt} ${buffer}`.length + 2, Math.max(2, cols - 2)), inputRow);
+    };
+
     const render = () => {
-      clearPromptAndMenu();
-      process.stdout.write(`${chalk.green(prompt)} ${buffer}`);
+      clearLayout();
       const list = matches();
       if (list.length > 0) {
         selected = Math.min(selected, list.length - 1);
-        process.stdout.write("\n");
-        for (let i = 0; i < list.length; i += 1) {
-          const cmd = list[i]!;
-          const prefix = i === selected ? chalk.cyan(">") : " ";
-          const name = i === selected ? chalk.cyan(cmd.usage) : cmd.usage;
-          process.stdout.write(`${prefix} ${name} ${chalk.dim(cmd.description)}\n`);
-        }
-        readline.moveCursor(process.stdout, 0, -(list.length + 1));
-        readline.cursorTo(process.stdout, `${prompt} ${buffer}`.length);
       }
+      process.stdout.write(
+        buildInteractiveLayout({
+          transcript: options.transcript ?? [],
+          input: buffer,
+          prompt,
+          suggestions: list,
+          selectedSuggestion: selected,
+          columns: process.stdout.columns ?? 80,
+          rows: process.stdout.rows ?? 24
+        })
+      );
+      moveCursorToInput();
     };
 
     const acceptSelectedCommand = () => {
@@ -98,8 +118,80 @@ export async function readInteractiveLine(prompt = "grok-code>"): Promise<string
     };
 
     process.stdin.on("keypress", onKeypress);
+    process.stdout.on("resize", render);
     render();
   });
+}
+
+export function buildInteractiveLayout({
+  transcript,
+  input,
+  prompt,
+  suggestions,
+  selectedSuggestion,
+  columns,
+  rows
+}: {
+  transcript: TranscriptEntry[];
+  input: string;
+  prompt: string;
+  suggestions: SlashCommand[];
+  selectedSuggestion: number;
+  columns: number;
+  rows: number;
+}): string {
+  const width = Math.max(32, columns);
+  const suggestionLines = suggestions.length > 0 ? suggestions.length + 1 : 0;
+  const transcriptHeight = Math.max(4, rows - suggestionLines - 5);
+  const contentWidth = width - 2;
+  const outputLines = transcript.flatMap((entry) => wrapLine(`${roleLabel(entry.role)}: ${entry.content}`, contentWidth - 2));
+  const visibleOutput = outputLines.slice(-Math.max(1, transcriptHeight - 2));
+  const paddedOutput = [...visibleOutput];
+  while (paddedOutput.length < transcriptHeight - 2) paddedOutput.unshift("");
+
+  const lines = [
+    `┌${"─".repeat(width - 2)}┐`,
+    ...paddedOutput.map((line) => `│ ${padOrTrim(line, contentWidth - 2)} │`),
+    `└${"─".repeat(width - 2)}┘`,
+    "",
+    `╭${"─".repeat(width - 2)}╮`,
+    `│ ${padOrTrim(`${prompt} ${input}`, contentWidth - 2)} │`,
+    `╰${"─".repeat(width - 2)}╯`
+  ];
+
+  if (suggestions.length > 0) {
+    lines.push("Commands:");
+    suggestions.forEach((command, index) => {
+      const marker = index === selectedSuggestion ? ">" : " ";
+      const usage = command.usage.padEnd(16);
+      lines.push(padOrTrim(`  ${marker} ${usage} ${command.description}`, width));
+    });
+  }
+
+  return `${lines.slice(0, rows).join("\n")}`;
+}
+
+function roleLabel(role: TranscriptEntry["role"]): string {
+  return {
+    user: "User",
+    assistant: "Assistant",
+    system: "System"
+  }[role];
+}
+
+function wrapLine(text: string, width: number): string[] {
+  if (width <= 0) return [""];
+  const source = text.replace(/\r?\n/g, " ");
+  const lines: string[] = [];
+  for (let index = 0; index < source.length; index += width) {
+    lines.push(source.slice(index, index + width));
+  }
+  return lines.length > 0 ? lines : [""];
+}
+
+function padOrTrim(text: string, width: number): string {
+  if (text.length > width) return text.slice(0, Math.max(0, width - 1)) + "…";
+  return text.padEnd(width);
 }
 
 export async function runWithEscInterrupt<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
