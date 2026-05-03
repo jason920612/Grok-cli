@@ -23,7 +23,7 @@ export function classifyCommand(command: string, background = false): CommandRis
 }
 
 function isWindowsDestructiveDelete(command: string): boolean {
-  return /\bremove-item\b[\s\S]*\s-(recurse|r)\b[\s\S]*\s-(force|f)\b/.test(command)
+  return /\bremove-item\b/.test(command) && /\s-(recurse|r)\b/.test(command) && /\s-(force|f)\b/.test(command)
     || /\bdel(?:ete)?\b[\s\S]*(\/s\b[\s\S]*\/q\b|\/q\b[\s\S]*\/s\b)/.test(command)
     || /\brmdir\b[\s\S]*(\/s\b[\s\S]*\/q\b|\/q\b[\s\S]*\/s\b)/.test(command)
     || /\brd\b[\s\S]*(\/s\b[\s\S]*\/q\b|\/q\b[\s\S]*\/s\b)/.test(command);

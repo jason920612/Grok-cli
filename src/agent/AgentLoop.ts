@@ -187,7 +187,7 @@ export function shouldContinueAfterPlanOnlyResponse(text: string, task: string, 
   const lower = text.toLowerCase();
   const taskLower = task.toLowerCase();
   const saysItWillUseTools = /(brief plan|before first tool call|i'?ll now|i will now|proceeding to|run the first tool|call .*tool|use .*tool|工具)/i.test(text);
-  const englishActionTask = /(commit|push|edit|modify|fix|write|create|delete|run|test|build|review|issue|pr)/i.test(taskLower);
+  const englishActionTask = /\b(commit|push|edit|modify|fix|write|create|delete|run|test|build|review|issue|pr)\b/i.test(taskLower);
   const localizedActionTask = ["\u4fee bug", "\u4fee\u6539", "\u4fee\u6b63", "\u5efa\u7acb", "\u65b0\u589e", "\u522a\u9664", "\u6267\u884c", "\u57f7\u884c", "\u6e2c\u8a66", "\u6d4b\u8bd5", "\u5efa\u7f6e", "\u63d0\u4ea4", "\u63a8\u9001", "\u5be9\u6838", "\u5ba1\u6838", "\u958bpr", "\u958b issue"].some((keyword) => taskLower.includes(keyword));
   const claimsNoCapability = /no .*tool available|there is no .*tool|tools limited to/i.test(lower);
   return actionCount === 0 && (englishActionTask || localizedActionTask) && (saysItWillUseTools || claimsNoCapability);

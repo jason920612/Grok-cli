@@ -118,6 +118,8 @@ test("approval policy supports local and all automation levels", async () => {
 
 test("Windows destructive delete commands are hard-denied", () => {
   assert.equal(classifyCommand("Remove-Item -LiteralPath dist -Recurse -Force"), "deny");
+  assert.equal(classifyCommand("Remove-Item -Force -Recurse dist"), "deny");
+  assert.equal(classifyCommand("Remove-Item -r -f dist"), "deny");
   assert.equal(classifyCommand("del /s /q dist"), "deny");
   assert.equal(classifyCommand("rmdir /s /q dist"), "deny");
   assert.equal(classifyCommand("rd /q /s dist"), "deny");
@@ -131,6 +133,14 @@ test("plan-only retry detection handles Chinese action tasks", () => {
   assert.equal(
     shouldContinueAfterPlanOnlyResponse("\u6211\u53ef\u4ee5\u63d0\u4f9b\u4e00\u4e9b\u5efa\u8b70\u3002", "\u8acb\u4fee bug", 1),
     false
+  );
+  assert.equal(
+    shouldContinueAfterPlanOnlyResponse("I will use tools to inspect the project.", "explain the project structure", 0),
+    false
+  );
+  assert.equal(
+    shouldContinueAfterPlanOnlyResponse("I will use tools to inspect the issue.", "open pr for the fix", 0),
+    true
   );
 });
 
