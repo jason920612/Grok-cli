@@ -124,6 +124,67 @@ ${executorClaim}`;
   return { ok: false, reason: `Verifier could not produce a verdict after 2 attempts. Last error: ${lastError}` };
 }
 
+const INTERMEDIATE_AUDIT_PROMPT = `You are an independent assumption detector for a coding agent runtime. Your job is to find current-state claims in intermediate planning text that are NOT backed by the runtime evidence provided.
+
+Rules:
+1. Only identify claims about observable workspace state: file contents, test results, environment state, command output, dependency state.
+2. Do NOT flag general reasoning, algorithmic plans, or hypotheticals.
+3. Claims backed by a tool result in the evidence list are acceptable.
+4. Compliance language ("I will check", "let me verify") is intent, not a claim — do not flag it.
+5. Only flag concrete factual assertions about the current state of the workspace.
+
+Respond with JSON only. No prose. Schema:
+{
+  "unsupported_assumptions": [
+    { "claim": "...", "why_unsupported": "...", "required_verification": "..." }
+  ]
+}
+If there are no unsupported current-state claims, return: { "unsupported_assumptions": [] }`;
+
+export type IntermediateAuditResult =
+  | { ok: true; unsupported_assumptions: UnsupportedAssumption[] }
+  | { ok: false; reason: string };
+
+export async function auditIntermediateClaims(
+  client: OpenAI,
+  model: string,
+  evidence: ToolEvidence[],
+  planningText: string,
+  signal?: AbortSignal
+): Promise<IntermediateAuditResult> {
+  if (!planningText.trim()) return { ok: true, unsupported_assumptions: [] };
+
+  const evidenceText = evidence.length > 0
+    ? evidence.map((e) => {
+        const provenance = [
+          e.filePath ? `file=${e.filePath}` : null,
+          e.lineRange ? `lines=${e.lineRange.start}-${e.lineRange.end}` : null,
+          e.exitCode !== undefined ? `exit=${e.exitCode}` : null
+        ].filter(Boolean).join(" ");
+        return `[step ${e.step}] ${e.tool}${provenance ? ` (${provenance})` : ""}: ${e.rawOutput.slice(0, 200)}`;
+      }).join("\n")
+    : "No tool evidence yet.";
+
+  const input = `${INTERMEDIATE_AUDIT_PROMPT}
+
+RUNTIME EVIDENCE:
+${evidenceText}
+
+INTERMEDIATE PLANNING TEXT TO AUDIT:
+${planningText}`;
+
+  try {
+    const response = await createResponse(client, { model, input, tools: [], toolChoice: "none", signal });
+    const text = extractResponseText(response);
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { ok: true, unsupported_assumptions: [] }; // lenient on parse failure
+    const parsed = JSON.parse(jsonMatch[0]) as { unsupported_assumptions: UnsupportedAssumption[] };
+    return { ok: true, unsupported_assumptions: parsed.unsupported_assumptions ?? [] };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 function extractResponseText(response: any): string {
   const output = Array.isArray(response?.output) ? response.output : [];
   const parts: string[] = [];

@@ -1,5 +1,3 @@
-export type MemoryFactSource = "user" | "read_file" | "terminal" | "patch" | "test" | "model_inference";
-
 /** Runtime-observed tool evidence — always verified by definition (the tool ran). */
 export type ToolEvidence = {
   step: number;
@@ -13,14 +11,6 @@ export type ToolEvidence = {
   lineRange?: { start: number; end: number };
   exitCode?: number;
   changedFiles?: string[];
-};
-
-/** A semantic claim extracted from model text — NOT automatically verified. */
-export type SemanticClaim = {
-  text: string;
-  step: number;
-  verified: boolean;
-  evidenceRefs: string[]; // references to ToolEvidence step+tool
 };
 
 /** An unsupported assumption that must be verified before it can enter durable memory. */
@@ -41,7 +31,6 @@ export type FailureRecord = {
 
 export class SituationMemory {
   private evidence: ToolEvidence[] = [];
-  private semanticClaims: SemanticClaim[] = [];
   private pendingVerifications: PendingVerification[] = [];
   private failures = new Map<string, FailureRecord>();
   private priorActions: string[] = [];

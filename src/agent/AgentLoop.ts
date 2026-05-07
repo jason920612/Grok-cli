@@ -11,7 +11,7 @@ import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import { buildModelInput } from "./modelInputBuilder.js";
 import { finalAnswerGate } from "./finalAnswerGate.js";
 import { SituationMemory } from "./SituationMemory.js";
-import { runVerifier, type VerifierResult } from "./Verifier.js";
+import { runVerifier, auditIntermediateClaims, type VerifierResult } from "./Verifier.js";
 
 type ToolActionSummary = {
   step: number;
@@ -125,6 +125,20 @@ export class AgentLoop {
           continue;
         }
 
+        // block finalization if unresolved pending verifications exist
+        const unresolved = situationMemory.getUnresolvedVerifications();
+        if (this.config.enableVerifier && unresolved.length > 0 && verifierReprompts < 2) {
+          verifierReprompts += 1;
+          console.log(`[verifier] Blocking finalization: ${unresolved.length} unresolved pending verification(s).`);
+          pendingInput = this.buildCorrectionInput(
+            task,
+            buildPendingVerificationBlock(unresolved),
+            useStateless ? situationMemory : undefined
+          );
+          step += 1;
+          continue;
+        }
+
         // candidate final answer — run verifier if enabled
         if (this.config.enableVerifier && parsed.finalText) {
           const accepted = await this.runVerifierLoop(
@@ -159,7 +173,13 @@ export class AgentLoop {
       }
 
       planOnlyReprompts = 0;
-      if (parsed.finalText) console.log(parsed.finalText);
+      if (parsed.finalText) {
+        console.log(parsed.finalText);
+        // intermediate audit: check planning text for unsupported current-state claims
+        if (this.config.enableVerifier) {
+          await this.auditIntermediateText(situationMemory, parsed.finalText, step, signal);
+        }
+      }
       console.log(formatToolBatch(step, parsed.functionCalls.map((call) => call.name)));
 
       // blind-retry guard
@@ -215,6 +235,21 @@ export class AgentLoop {
       : "";
     const suffix = `${actionSection}${diffSection}\n\n[Final checks]\nBackground: ${gate.backgroundStatus}\nDiff checked: ${gate.diffChecked ? "yes" : "not needed"}`;
     return finalText ? `${finalText}${suffix}` : `Stopped after max steps without a final model message.${suffix}`;
+  }
+
+  private async auditIntermediateText(
+    memory: SituationMemory,
+    planningText: string,
+    step: number,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const verifierModel = this.config.verifierModel || this.config.model;
+    const result = await auditIntermediateClaims(this.client, verifierModel, memory.getEvidence(), planningText, signal);
+    if (!result.ok) return; // lenient on intermediate audit failure — don't block tool execution
+    for (const assumption of result.unsupported_assumptions) {
+      memory.addPendingVerification(assumption.claim, assumption.required_verification, step);
+      console.log(`[intermediate audit] Unsupported claim queued for verification: ${assumption.claim.slice(0, 100)}`);
+    }
   }
 
   private async runVerifierLoop(
@@ -375,6 +410,18 @@ export class AgentLoop {
       expiresAfterSteps: 2
     });
   }
+}
+
+function buildPendingVerificationBlock(unresolved: Array<{ claim: string; requiredAction: string }>): string {
+  const lines = [
+    "FINALIZATION BLOCKED: The following claims were identified as unsupported and must be verified with tool calls before a final answer can be accepted:"
+  ];
+  for (const pv of unresolved) {
+    lines.push(`  Claim: ${pv.claim}`);
+    lines.push(`  Required action: ${pv.requiredAction}`);
+  }
+  lines.push("\nCompliance language ('I verified', 'I checked') is NOT evidence. Perform the required tool calls.");
+  return lines.join("\n");
 }
 
 function buildVerifierCorrection(vr: VerifierResult): string {
