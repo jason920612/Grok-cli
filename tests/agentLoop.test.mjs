@@ -23,9 +23,10 @@ function responseWithText(id, text) {
   return { id, output_text: text };
 }
 
-function makeLoop({ responses, config = {}, execute, isReadOnly } = {}) {
+function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = [] } = {}) {
   const payloads = [];
   const toolCalls = [];
+  const storedContextItems = [...contextItems];
   let index = 0;
   const client = {
     responses: {
@@ -57,9 +58,12 @@ function makeLoop({ responses, config = {}, execute, isReadOnly } = {}) {
       upsert() {},
       nextStep() {},
       relevant() {
-        return [];
+        return storedContextItems;
       },
-      add() {}
+      add(item) {
+        storedContextItems.push(item);
+        return item;
+      }
     },
     {
       schemas() {
@@ -188,4 +192,98 @@ test("verifier audits zero-tool final answers and reports retry exhaustion", asy
   assert.match(String(verifierInput), /No tool calls recorded/);
   assert.match(output, /Retry budget exhausted/);
   assert.match(output, /read src\/agent\/Agent\.ts/);
+});
+
+test("verifier receives runtime memory facts with provenance", async () => {
+  const { loop, payloads } = makeLoop({
+    config: { enableVerifier: true, verifierMaxRetries: 1 },
+    contextItems: [
+      {
+        type: "file_range",
+        content: "src/agent/Agent.ts:1-3\n1: export class Agent {}",
+        priority: 70,
+        factSource: "tool_output",
+        factConfidence: "verified",
+        source: { path: "src/agent/Agent.ts", startLine: 1, endLine: 3 },
+        tokensEstimate: 10
+      },
+      {
+        type: "task_summary",
+        content: "The executor thinks Agent is exported.",
+        priority: 60,
+        factSource: "model_inference",
+        factConfidence: "inferred",
+        tokensEstimate: 10
+      }
+    ],
+    responses: [
+      responseWithText("r1", "src/agent/Agent.ts exports Agent"),
+      (payload) => {
+        assert.equal(payload.tool_choice, "none");
+        return responseWithText(
+          "v1",
+          JSON.stringify({
+            verdict: "pass",
+            reason: "The file_range evidence supports the claim.",
+            unsupportedClaims: [],
+            unsupportedAssumptions: [],
+            missingEvidence: [],
+            requiredNextActions: [],
+            confidence: "high"
+          })
+        );
+      }
+    ]
+  });
+
+  await loop.run("does src/agent/Agent.ts export Agent?", true);
+
+  const verifierInput = String(payloads.find((payload) => payload.tool_choice === "none")?.input);
+  assert.match(verifierInput, /<runtime_memory_facts>/);
+  assert.match(verifierInput, /confidence=verified/);
+  assert.match(verifierInput, /path=src\/agent\/Agent\.ts/);
+  assert.match(verifierInput, /confidence=inferred/);
+});
+
+test("verifier receives visible executor trace as claims not evidence", async () => {
+  const { loop, payloads } = makeLoop({
+    config: { enableVerifier: true, verifierMaxRetries: 1 },
+    responses: [
+      responseWithTool("r1", functionCall("read_file_range", { path: "src/agent/Agent.ts", startLine: 1, endLine: 20 }, "c1")),
+      responseWithText("r2", "The function already handles null values."),
+      (payload) => {
+        assert.equal(payload.tool_choice, "none");
+        return responseWithText(
+          "v1",
+          JSON.stringify({
+            verdict: "needs_more_evidence",
+            reason: "The trace claim lacks supporting evidence.",
+            unsupportedClaims: ["The function already handles null values."],
+            unsupportedAssumptions: [
+              {
+                claim: "The function already handles null values.",
+                whyUnsupported: "The provided file evidence does not show null handling.",
+                requiredVerification: "Read the relevant function body or tests."
+              }
+            ],
+            missingEvidence: ["Relevant function body or test output"],
+            requiredNextActions: ["read_file_range around the target function"],
+            confidence: "high"
+          })
+        );
+      }
+    ],
+    isReadOnly(name) {
+      return name === "read_file_range";
+    },
+    execute(name, args) {
+      return { ok: true, data: {}, summary: `${name} ${args.path}` };
+    }
+  });
+
+  await loop.run("check null handling", true);
+
+  const verifierInput = String(payloads.find((payload) => payload.tool_choice === "none")?.input);
+  assert.match(verifierInput, /<executor_visible_trace_claims_not_evidence>/);
+  assert.match(verifierInput, /The function already handles null values/);
 });

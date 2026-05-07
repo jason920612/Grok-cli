@@ -4,9 +4,9 @@ import { tokenEstimate } from "./tokenEstimate.js";
 export function compactItems(items: ContextItem[], task: string, step = 0): ContextItem {
   const eligible = items.filter((item) => item.type !== "file_range" || item.priority >= 50).slice(-80);
 
-  // Verified facts first, inferred/uncertain tagged explicitly so the model doesn't treat them as ground truth
-  const verified = eligible.filter((item) => !item.factConfidence || item.factConfidence === "verified");
-  const inferred = eligible.filter((item) => item.factConfidence === "inferred" || item.factConfidence === "uncertain");
+  // Verified facts first; unmarked legacy items are tagged uncertain instead of promoted to ground truth.
+  const verified = eligible.filter((item) => item.factConfidence === "verified");
+  const inferred = eligible.filter((item) => item.factConfidence === "inferred" || item.factConfidence === "uncertain" || !item.factConfidence);
 
   const formatItem = (item: ContextItem, tag?: string): string => {
     const prefix = tag ? ` [${tag}]` : "";
@@ -15,7 +15,7 @@ export function compactItems(items: ContextItem[], task: string, step = 0): Cont
 
   const facts = [
     ...verified.map((item) => formatItem(item)),
-    ...inferred.map((item) => formatItem(item, item.factConfidence))
+    ...inferred.map((item) => formatItem(item, item.factConfidence ?? "uncertain"))
   ].join("\n");
   const content = [
     `Current task: ${task}`,
@@ -33,7 +33,9 @@ export function compactItems(items: ContextItem[], task: string, step = 0): Cont
     lastUsedAt: now,
     createdStep: step,
     lastUsedStep: step,
-    pinned: true
+    pinned: true,
+    factSource: "model_inference",
+    factConfidence: "inferred"
   };
 }
 

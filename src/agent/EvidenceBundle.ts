@@ -5,6 +5,20 @@ export type EvidenceItem = {
   summary: string;
 };
 
+export type EvidenceMemoryFact = {
+  type: string;
+  content: string;
+  factSource?: string;
+  factConfidence: "verified" | "inferred" | "uncertain";
+  source?: {
+    path?: string;
+    startLine?: number;
+    endLine?: number;
+    command?: string;
+    processId?: string;
+  };
+};
+
 export type UnsupportedAssumption = {
   claim: string;
   whyUnsupported: string;
@@ -24,5 +38,7 @@ export type VerifierVerdict = {
 export type EvidenceBundle = {
   userTask: string;
   executorClaim: string;
+  executorTrace: string[];
   evidenceItems: EvidenceItem[];
+  memoryFacts: EvidenceMemoryFact[];
 };

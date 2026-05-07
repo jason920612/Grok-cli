@@ -10,6 +10,8 @@ Your only job is to determine whether the executor's claimed result is actually 
 
 Rules:
 - Only trust tool-backed evidence: file reads, shell command outputs, patches applied, test results, git operations.
+- Treat runtime memory facts as evidence only when they are marked confidence=verified. Treat inferred/uncertain facts as hypotheses or missing-evidence hints, not proof.
+- Treat executor visible trace as claims/assumptions to audit, not evidence. Flag unsupported assumptions in that trace when evidence is missing.
 - Do not trust the executor's claim, reasoning, intentions, or self-assessment at face value.
 - Do not self-certify compliance with these rules; only evidence references count.
 - A failed tool call (ok=false) proves failure, not success.
@@ -101,6 +103,26 @@ function buildVerifierInput(bundle: EvidenceBundle): string {
         .join("\n")
     : "No tool calls recorded.";
 
+  const memoryFactsText = bundle.memoryFacts.length > 0
+    ? bundle.memoryFacts
+        .map((item, i) => {
+          const source = [
+            item.factSource ? `source=${item.factSource}` : undefined,
+            `confidence=${item.factConfidence}`,
+            item.source?.path ? `path=${item.source.path}` : undefined,
+            item.source?.startLine !== undefined ? `startLine=${item.source.startLine}` : undefined,
+            item.source?.endLine !== undefined ? `endLine=${item.source.endLine}` : undefined,
+            item.source?.command ? `command=${item.source.command}` : undefined
+          ].filter(Boolean).join(", ");
+          return `${i + 1}. [${item.type}${source ? `; ${source}` : ""}] ${item.content}`;
+        })
+        .join("\n")
+    : "No runtime memory facts recorded.";
+
+  const traceText = bundle.executorTrace.length > 0
+    ? bundle.executorTrace.map((item, i) => `${i + 1}. ${item}`).join("\n")
+    : "No executor trace recorded.";
+
   return `${VERIFIER_PROMPT}
 
 <task>
@@ -110,6 +132,14 @@ ${bundle.userTask}
 <evidence>
 ${evidenceText}
 </evidence>
+
+<runtime_memory_facts>
+${memoryFactsText}
+</runtime_memory_facts>
+
+<executor_visible_trace_claims_not_evidence>
+${traceText}
+</executor_visible_trace_claims_not_evidence>
 
 <claim>
 ${bundle.executorClaim}

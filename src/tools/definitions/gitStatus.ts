@@ -16,7 +16,15 @@ export function gitStatusTool(skills: ToolSkillRegistry) {
     async (_args, ctx) => {
       const { stdout } = await execFileAsync("git", ["status", "--short", "--branch"], { cwd: ctx.workspaceRoot, timeout: 10_000, windowsHide: true });
       const changedFiles = stdout.split(/\r?\n/).filter((line) => line && !line.startsWith("##")).map((line) => line.slice(3).trim());
-      ctx.context.add({ type: "shell_output", content: `git status --short --branch\n${stdout}`, priority: 65, expiresAfterSteps: 2, source: { command: "git status --short --branch" } });
+      ctx.context.add({
+        type: "shell_output",
+        content: `git status --short --branch\n${stdout}`,
+        priority: 65,
+        expiresAfterSteps: 2,
+        factSource: "tool_output",
+        factConfidence: "verified",
+        source: { command: "git status --short --branch" }
+      });
       return { raw: stdout, changedFiles };
     }
   );

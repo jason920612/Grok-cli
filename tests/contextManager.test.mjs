@@ -74,3 +74,26 @@ test("budget eviction still removes the lowest-priority non-pinned item first", 
   assert.equal(ids.includes(low.id), false);
   assert.equal(ids.includes(high.id), true);
 });
+
+test("context compaction tags unmarked items as uncertain instead of verified", () => {
+  const context = new ContextManager();
+  context.add({
+    type: "shell_output",
+    content: "legacy shell output with no provenance",
+    priority: 80
+  });
+  context.add({
+    type: "file_range",
+    content: "src/index.ts:1\nverified source",
+    priority: 80,
+    factSource: "tool_output",
+    factConfidence: "verified"
+  });
+
+  const summary = context.compactContext("verify provenance");
+
+  assert.match(summary.content, /file_range: src\/index\.ts:1 verified source/);
+  assert.match(summary.content, /shell_output \[uncertain\]: legacy shell output with no provenance/);
+  assert.equal(summary.factSource, "model_inference");
+  assert.equal(summary.factConfidence, "inferred");
+});

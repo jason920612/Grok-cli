@@ -41,7 +41,14 @@ export function applyPatchTool(skills: ToolSkillRegistry) {
       }
       console.log(chalk.green("Applied patch:"));
       console.log(colorUnifiedDiff(args.patch));
-      ctx.context.add({ type: "patch", content: args.patch, priority: 85, source: { command: args.reason } });
+      ctx.context.add({
+        type: "patch",
+        content: args.patch,
+        priority: 85,
+        factSource: "patch",
+        factConfidence: "verified",
+        source: { command: args.reason }
+      });
       return { modifiedFiles: modified, deletedFiles: deleted, reminder: "Run git_diff and the smallest relevant tests/checks before final answer." };
     }
   );

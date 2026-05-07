@@ -11,7 +11,8 @@ import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import { buildModelInput, buildStatelessInput } from "./modelInputBuilder.js";
 import { finalAnswerGate } from "./finalAnswerGate.js";
 import { VerifierAgent, buildVerifierFeedback } from "./VerifierAgent.js";
-import type { EvidenceBundle } from "./EvidenceBundle.js";
+import type { EvidenceBundle, EvidenceMemoryFact } from "./EvidenceBundle.js";
+import type { ContextItem } from "../context/ContextItem.js";
 
 type ToolActionSummary = {
   step: number;
@@ -109,6 +110,7 @@ export class AgentLoop {
     let finalText = "";
     const usedToolNames = new Set<string>();
     const toolActionSummaries: ToolActionSummary[] = [];
+    const executorTrace: string[] = [];
     let planOnlyReprompts = 0;
     let emptyReprompts = 0;
     let verifierAttempts = 0;
@@ -220,6 +222,7 @@ export class AgentLoop {
           shouldContinueAfterPlanOnlyResponse(parsed.finalText, task, toolActionSummaries.length)
         ) {
           planOnlyReprompts++;
+          executorTrace.push(parsed.finalText);
           console.log(parsed.finalText);
           console.log(
             "Grok provided a plan without tool calls; asking it to continue with the required tools."
@@ -238,12 +241,14 @@ export class AgentLoop {
             const bundle: EvidenceBundle = {
               userTask: task,
               executorClaim: parsed.finalText,
+              executorTrace: parsed.finalText ? [...executorTrace, parsed.finalText] : executorTrace,
               evidenceItems: toolActionSummaries.map((s) => ({
                 toolName: s.name,
                 ok: s.ok,
                 args: s.args,
                 summary: s.summary
-              }))
+              })),
+              memoryFacts: buildVerifierMemoryFacts(this.context.relevant(task, 20_000))
             };
             const verifier = new VerifierAgent(this.client, this.config);
             const verdict = await verifier.verify(bundle);
@@ -277,6 +282,8 @@ export class AgentLoop {
         finalText = parsed.finalText;
         break;
       }
+
+      if (parsed.finalText) executorTrace.push(parsed.finalText);
 
       if (parsed.functionCalls.length > 1) {
         runtimeFeedback =
@@ -475,6 +482,37 @@ function formatActionSummary(actions: ToolActionSummary[]): string {
   return actions
     .map((action) => `- step ${action.step}: ${action.name} ${action.ok ? "ok" : "failed"} - ${action.summary}`)
     .join("\n");
+}
+
+function buildVerifierMemoryFacts(items: ContextItem[]): EvidenceMemoryFact[] {
+  return items
+    .filter((item) =>
+      [
+        "file_range",
+        "file_overview",
+        "search_result",
+        "shell_output",
+        "background_output_summary",
+        "patch",
+        "test_result",
+        "environment_summary",
+        "project_tooling_summary",
+        "task_summary"
+      ].includes(item.type)
+    )
+    .slice(-40)
+    .map((item) => ({
+      type: item.type,
+      content: oneLine(item.content, 500),
+      factSource: item.factSource,
+      factConfidence: item.factConfidence ?? "uncertain",
+      source: item.source
+    }));
+}
+
+function oneLine(value: string, max: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > max ? `${compact.slice(0, max)}...` : compact;
 }
 
 export function shouldContinueAfterPlanOnlyResponse(
