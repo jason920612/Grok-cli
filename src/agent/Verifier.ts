@@ -178,8 +178,15 @@ ${planningText}`;
     const response = await createResponse(client, { model, input, tools: [], toolChoice: "none", signal });
     const text = extractResponseText(response);
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return { ok: true, unsupported_assumptions: [] }; // lenient on parse failure
-    const parsed = JSON.parse(jsonMatch[0]) as { unsupported_assumptions: UnsupportedAssumption[] };
+    if (!jsonMatch) {
+      return { ok: false, reason: `no JSON in intermediate audit response: ${text.slice(0, 200)}` };
+    }
+    let parsed: { unsupported_assumptions?: UnsupportedAssumption[] };
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch (parseErr) {
+      return { ok: false, reason: `JSON parse error in intermediate audit: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}` };
+    }
     return { ok: true, unsupported_assumptions: parsed.unsupported_assumptions ?? [] };
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
