@@ -18,6 +18,7 @@ type ToolActionSummary = {
   name: string;
   ok: boolean;
   summary: string;
+  args?: string;
 };
 
 type FailureRecord = {
@@ -89,6 +90,7 @@ export class AgentLoop {
     let emptyReprompts = 0;
     let verifierAttempts = 0;
     let lastVerifierFeedback: string | undefined;
+    let lastVerifierVerdict: import("./EvidenceBundle.js").VerifierVerdict | undefined;
     const hasModifiedFiles = { value: false };
     const failureTracker = new FailureTracker();
     let chainLength = 0;
@@ -202,42 +204,46 @@ export class AgentLoop {
           continue;
         }
 
-        // Verifier gate: run before accepting the final answer
-        if (
-          this.config.enableVerifier &&
-          toolActionSummaries.length > 0 &&
-          verifierAttempts < this.config.verifierMaxRetries &&
-          step <= this.config.maxSteps
-        ) {
-          const bundle: EvidenceBundle = {
-            userTask: task,
-            executorClaim: parsed.finalText,
-            evidenceItems: toolActionSummaries.map((s) => ({
-              toolName: s.name,
-              ok: s.ok,
-              summary: s.summary
-            }))
-          };
-          const verifier = new VerifierAgent(this.client, this.config);
-          const verdict = await verifier.verify(bundle);
-          verifierAttempts++;
+        // Verifier gate: run before accepting the final answer.
+        // Runs even when no tool calls were made so first-turn knowledge-only answers are audited.
+        if (this.config.enableVerifier && step <= this.config.maxSteps) {
+          if (verifierAttempts < this.config.verifierMaxRetries) {
+            const bundle: EvidenceBundle = {
+              userTask: task,
+              executorClaim: parsed.finalText,
+              evidenceItems: toolActionSummaries.map((s) => ({
+                toolName: s.name,
+                ok: s.ok,
+                args: s.args,
+                summary: s.summary
+              }))
+            };
+            const verifier = new VerifierAgent(this.client, this.config);
+            const verdict = await verifier.verify(bundle);
+            verifierAttempts++;
+            lastVerifierVerdict = verdict;
 
-          if (verdict.verdict !== "pass") {
-            const feedback = buildVerifierFeedback(verdict);
-            console.log(`[Verifier] ${verdict.verdict} (confidence: ${verdict.confidence}): ${verdict.reason}`);
-            lastVerifierFeedback = feedback;
-            this.context.upsert("verifier-feedback", {
-              type: "verifier_feedback",
-              content: feedback,
-              priority: 95,
-              pinned: false,
-              expiresAfterSteps: 4
-            });
-            pendingInput = feedback;
-            step++;
-            continue;
+            if (verdict.verdict !== "pass") {
+              const feedback = buildVerifierFeedback(verdict);
+              console.log(`[Verifier] ${verdict.verdict} (confidence: ${verdict.confidence}): ${verdict.reason}`);
+              lastVerifierFeedback = feedback;
+              this.context.upsert("verifier-feedback", {
+                type: "verifier_feedback",
+                content: feedback,
+                priority: 95,
+                pinned: false,
+                expiresAfterSteps: 4
+              });
+              pendingInput = feedback;
+              step++;
+              continue;
+            }
+            console.log(`[Verifier] pass (confidence: ${verdict.confidence})`);
+          } else if (lastVerifierVerdict && lastVerifierVerdict.verdict !== "pass") {
+            // Retries exhausted with unresolved issues — emit graceful partial-progress report
+            finalText = buildVerifierExhaustedReport(parsed.finalText, lastVerifierVerdict);
+            break;
           }
-          console.log(`[Verifier] pass (confidence: ${verdict.confidence})`);
         }
 
         finalText = parsed.finalText;
@@ -376,7 +382,7 @@ export class AgentLoop {
             `. Choose a different approach: narrow the scope, inspect the root cause, or change strategy.`
         }
       };
-      toolActionSummaries.push({ step, name: call.name, ok: false, summary: result.error.message });
+      toolActionSummaries.push({ step, name: call.name, ok: false, summary: result.error.message, args: call.arguments?.slice(0, 300) });
       return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
     }
 
@@ -398,7 +404,8 @@ export class AgentLoop {
       step,
       name: call.name,
       ok: result.ok,
-      summary: summarizeToolResult(result)
+      summary: summarizeToolResult(result),
+      args: call.arguments?.slice(0, 300)
     });
 
     this.context.add({
@@ -464,11 +471,32 @@ export function shouldContinueAfterPlanOnlyResponse(
     "開 issue"
   ].some((keyword) => taskLower.includes(keyword));
   const claimsNoCapability = /no .*tool available|there is no .*tool|tools limited to/i.test(lower);
-  return (
-    actionCount === 0 &&
-    (englishActionTask || localizedActionTask) &&
-    (saysItWillUseTools || claimsNoCapability)
-  );
+  // If the model explicitly says it will use tools on an action task, reprompt regardless of
+  // how many tools have already run — catches mid-task turns that narrate intent without acting.
+  if (saysItWillUseTools && (englishActionTask || localizedActionTask)) return true;
+  // For fresh starts only: reprompt if it's an action task and the model claims no capability
+  return actionCount === 0 && (englishActionTask || localizedActionTask) && claimsNoCapability;
+}
+
+function buildVerifierExhaustedReport(
+  executorClaim: string,
+  lastVerdict: import("./EvidenceBundle.js").VerifierVerdict
+): string {
+  const lines = [
+    "[Verifier] Retry budget exhausted. The executor's final claim could not be independently verified.",
+    `Last verifier verdict: ${lastVerdict.verdict} (confidence: ${lastVerdict.confidence})`,
+    `Reason: ${lastVerdict.reason}`
+  ];
+  if (lastVerdict.unsupportedClaims.length > 0) {
+    lines.push("Unresolved unsupported claims:");
+    for (const c of lastVerdict.unsupportedClaims) lines.push(`  - ${c}`);
+  }
+  if (lastVerdict.missingEvidence.length > 0) {
+    lines.push("Missing evidence:");
+    for (const e of lastVerdict.missingEvidence) lines.push(`  - ${e}`);
+  }
+  lines.push("", "Executor's unverified final answer (treat as partial progress):", executorClaim);
+  return lines.join("\n");
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
