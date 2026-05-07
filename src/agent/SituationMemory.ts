@@ -5,6 +5,15 @@ export type MemoryFact = {
   text: string;
   source: MemoryFactSource;
   confidence: MemoryFactConfidence;
+  evidenceRef?: string;
+};
+
+export type ToolEvidence = {
+  step: number;
+  tool: string;
+  argsText: string;
+  outputExcerpt: string;
+  ok: boolean;
 };
 
 export type FailureRecord = {
@@ -19,15 +28,20 @@ export class SituationMemory {
   private facts: MemoryFact[] = [];
   private priorActions: string[] = [];
   private failures = new Map<string, FailureRecord>();
+  private evidence: ToolEvidence[] = [];
 
-  recordAction(tool: string, args: unknown, ok: boolean, resultSummary?: string): void {
-    const argsStr = JSON.stringify(args).slice(0, 120);
-    this.priorActions.push(`${tool}(${argsStr})`);
-    if (ok && resultSummary) {
+  recordEvidence(tool: string, args: unknown, outputExcerpt: string, ok: boolean, step: number): void {
+    const argsText = JSON.stringify(args).slice(0, 120);
+    this.priorActions.push(`${tool}(${argsText})`);
+    this.evidence.push({ step, tool, argsText, outputExcerpt: outputExcerpt.slice(0, 600), ok });
+
+    if (ok) {
+      const ref = `${tool}@step${step}`;
       this.facts.push({
-        text: `${tool}: ${resultSummary}`,
+        text: `${tool} succeeded: ${outputExcerpt.slice(0, 200)}`,
         source: this.toolToSource(tool),
-        confidence: "verified"
+        confidence: "verified",
+        evidenceRef: ref
       });
     }
   }
@@ -57,9 +71,7 @@ export class SituationMemory {
   getLastFailure(): FailureRecord | undefined {
     let latest: FailureRecord | undefined;
     for (const record of this.failures.values()) {
-      if (!latest || record.lastAttemptStep > latest.lastAttemptStep) {
-        latest = record;
-      }
+      if (!latest || record.lastAttemptStep > latest.lastAttemptStep) latest = record;
     }
     return latest;
   }
@@ -70,18 +82,27 @@ export class SituationMemory {
     return total;
   }
 
+  getEvidence(): ToolEvidence[] {
+    return this.evidence;
+  }
+
   snapshot(): string {
     const lines: string[] = [];
 
+    lines.push("Current workspace state is UNKNOWN until observed via tools.");
+    lines.push("Do not infer or assume file contents, test results, or environment state without tool evidence.");
+
     if (this.priorActions.length > 0) {
-      lines.push("Prior local agent actions:");
+      lines.push("\nPrior local agent actions (runtime-observed, not user actions):");
       for (const action of this.priorActions.slice(-20)) lines.push(`- ${action}`);
     }
 
-    const verified = this.facts.filter((f) => f.confidence === "verified").slice(-10);
-    if (verified.length > 0) {
-      lines.push("\nVerified workspace / runtime observations:");
-      for (const fact of verified) lines.push(`- [${fact.source}] ${fact.text}`);
+    const recentEvidence = this.evidence.filter((e) => e.ok).slice(-8);
+    if (recentEvidence.length > 0) {
+      lines.push("\nVerified runtime observations (evidence-backed only):");
+      for (const ev of recentEvidence) {
+        lines.push(`- [step ${ev.step}] ${ev.tool}(${ev.argsText}): ${ev.outputExcerpt.slice(0, 200)}`);
+      }
     }
 
     const lastFailure = this.getLastFailure();
@@ -93,10 +114,11 @@ export class SituationMemory {
       lines.push("  Constraint: Do not retry the exact same action unchanged. Choose a different approach.");
     }
 
-    lines.push("\nKnown constraints:");
-    lines.push("- Do not claim tests pass unless a test command actually passed.");
-    lines.push("- Do not infer file contents without reading the file via a tool.");
-    lines.push("- Treat verified facts as authoritative. Treat inferred facts as hypotheses requiring tool verification.");
+    lines.push("\nEpistemic constraints:");
+    lines.push("- Claims about file contents must be backed by read_file_range evidence.");
+    lines.push("- Claims that tests pass must be backed by a test command with exit status 0.");
+    lines.push("- Claims that patches were applied must be backed by apply_patch success.");
+    lines.push("- Do not present inferred facts as confirmed.");
 
     return lines.join("\n");
   }

@@ -20,6 +20,7 @@ type CliOpts = {
   webSearch?: boolean;
   xSearch?: boolean;
   conversationMode?: ConversationMode;
+  verifier?: boolean;
 };
 
 let activeSigintCleanup: (() => void) | undefined;
@@ -38,7 +39,8 @@ export async function main(): Promise<void> {
     .option("--no-server-tools", "Disable xAI server-side tools")
     .option("--no-web-search", "Disable xAI web_search server-side tool")
     .option("--no-x-search", "Disable xAI x_search server-side tool")
-    .option("--conversation-mode <mode>", "stateful|stateless|hybrid (default: stateful)", "stateful");
+    .option("--conversation-mode <mode>", "stateful|stateless|hybrid (default: stateful)", "stateful")
+    .option("--verifier", "Enable independent verifier call to audit executor claims");
 
   program.command("ask <question...>").description("Ask a question").action(async (question: string[]) => runOne(question.join(" "), program.opts<CliOpts>(), "ask"));
   program.command("edit <task...>").description("Run an edit task").action(async (task: string[]) => runOne(task.join(" "), program.opts<CliOpts>(), "edit"));
@@ -71,7 +73,8 @@ async function makeAgent(opts: CliOpts, task = "", cwd = process.cwd()): Promise
     serverTools: toolOverrides.serverTools,
     enableWebSearch: toolOverrides.enableWebSearch,
     enableXSearch: toolOverrides.enableXSearch,
-    conversationMode: parseConversationMode(opts.conversationMode)
+    conversationMode: parseConversationMode(opts.conversationMode),
+    enableVerifier: opts.verifier === true
   });
   const client = createXaiClient();
   const agent = new Agent(client, config, task);
