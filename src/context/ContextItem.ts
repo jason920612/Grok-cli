@@ -1,3 +1,6 @@
+export type FactSource = "user" | "tool_output" | "patch" | "test" | "model_inference";
+export type FactConfidence = "verified" | "inferred" | "uncertain";
+
 export type ContextItem = {
   id: string;
   type:
@@ -19,6 +22,8 @@ export type ContextItem = {
     | "background_output_summary"
     | "patch"
     | "test_result"
+    | "action_record"
+    | "failure_record"
     | "final";
   content: string;
   tokensEstimate: number;
@@ -29,6 +34,8 @@ export type ContextItem = {
   lastUsedStep: number;
   pinned?: boolean;
   expiresAfterSteps?: number;
+  factSource?: FactSource;
+  factConfidence?: FactConfidence;
   source?: {
     path?: string;
     startLine?: number;

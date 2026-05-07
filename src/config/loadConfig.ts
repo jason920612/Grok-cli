@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 export type ApprovalMode = "on-request" | "auto-local" | "auto-safe" | "auto-all" | "never";
 export type ToolChoice = "auto" | "required" | "none";
 export type SandboxProfile = "default" | "build" | "test" | "debug" | "package" | "docs";
+export type ConversationMode = "stateful" | "stateless" | "hybrid";
 
 export type GrokCodeConfig = {
   model: string;
@@ -17,6 +18,9 @@ export type GrokCodeConfig = {
   workspaceRoot: string;
   sandboxProfile: SandboxProfile;
   workspaceTrusted: boolean;
+  conversationMode: ConversationMode;
+  hybridResetAfterTurns: number;
+  hybridResetAfterFailures: number;
 };
 
 export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfig> = {}): GrokCodeConfig {
@@ -34,6 +38,9 @@ export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfi
     workspaceRoot: cwd,
     sandboxProfile: "default",
     workspaceTrusted: false,
+    conversationMode: "stateful",
+    hybridResetAfterTurns: 10,
+    hybridResetAfterFailures: 3,
     ...projectConfig,
     ...cleanOverrides
   };
