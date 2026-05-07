@@ -21,6 +21,7 @@ export type StatelessInputBuildOptions = {
     error: string;
     attempts: number;
   };
+  runtimeFeedback?: string;
   toolIndex: string;
   generalSkills: Skill[];
   toolSkills: ToolSkill[];
@@ -40,6 +41,12 @@ Error: ${options.lastFailure.error}
 Attempts: ${options.lastFailure.attempts}
 Constraint: Do not retry this exact call unchanged. Narrow the scope, inspect the root cause, or choose a different approach.
 </Last Failure>`
+    : "";
+
+  const runtimeFeedbackSection = options.runtimeFeedback
+    ? `\n<Runtime Feedback>
+${options.runtimeFeedback}
+</Runtime Feedback>`
     : "";
 
   return `<System>
@@ -71,7 +78,7 @@ ${options.task}
 <Verified Workspace Observations>
 ${observations}
 </Verified Workspace Observations>
-${failureSection}`;
+${failureSection}${runtimeFeedbackSection}`;
 }
 
 export function buildModelInput(options: ModelInputBuildOptions): string {
