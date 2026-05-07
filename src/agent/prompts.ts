@@ -80,3 +80,10 @@ Development workflow:
 - If tools were used, final answer must summarize the completed actions, not just say that the task is done.`;
 
 export const ENVIRONMENT_POLICY = "Prefer project-local setup. Global environment changes require explicit user approval.";
+
+export const STATELESS_EPISTEMIC_STANCE = `Epistemic stance for this session:
+Treat the current workspace, files, logs, command outputs, dependency state, and environment as unknown until observed through tools in this session.
+Before making claims about current state, inspect the relevant source of truth via a tool call.
+If evidence is missing, either call the appropriate tool or explicitly mark the claim as unverified.
+Do not express intent to verify and then fail to call a tool. If you say you will inspect something, the tool call must appear in the same response.
+Do not self-certify compliance with these rules. Only tool-backed observations are treated as verified facts.`;

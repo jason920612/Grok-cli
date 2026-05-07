@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { createXaiClient } from "./api/xaiClient.js";
 import { Agent } from "./agent/Agent.js";
-import { loadConfig, type ApprovalMode, type SandboxProfile, type ToolChoice } from "./config/loadConfig.js";
+import { loadConfig, type ApprovalMode, type SandboxProfile, type ToolChoice, type ConversationMode } from "./config/loadConfig.js";
 import { startRepl } from "./ui/repl.js";
 import { formatSessionStatus, printHeader } from "./ui/terminal.js";
 import { SessionStore } from "./session/SessionStore.js";
@@ -19,6 +19,7 @@ type CliOpts = {
   serverTools?: boolean;
   webSearch?: boolean;
   xSearch?: boolean;
+  conversationMode?: ConversationMode;
 };
 
 let activeSigintCleanup: (() => void) | undefined;
@@ -36,7 +37,8 @@ export async function main(): Promise<void> {
     .option("--max-steps <number>", "Maximum agent steps", "30")
     .option("--no-server-tools", "Disable xAI server-side tools")
     .option("--no-web-search", "Disable xAI web_search server-side tool")
-    .option("--no-x-search", "Disable xAI x_search server-side tool");
+    .option("--no-x-search", "Disable xAI x_search server-side tool")
+    .option("--conversation-mode <mode>", "stateful|stateless|hybrid", "stateful");
 
   program.command("ask <question...>").description("Ask a question").action(async (question: string[]) => runOne(question.join(" "), program.opts<CliOpts>(), "ask"));
   program.command("edit <task...>").description("Run an edit task").action(async (task: string[]) => runOne(task.join(" "), program.opts<CliOpts>(), "edit"));
@@ -68,7 +70,8 @@ async function makeAgent(opts: CliOpts, task = "", cwd = process.cwd()): Promise
     maxSteps: parseMaxSteps(opts.maxSteps),
     serverTools: toolOverrides.serverTools,
     enableWebSearch: toolOverrides.enableWebSearch,
-    enableXSearch: toolOverrides.enableXSearch
+    enableXSearch: toolOverrides.enableXSearch,
+    conversationMode: parseConversationMode(opts.conversationMode)
   });
   const client = createXaiClient();
   const agent = new Agent(client, config, task);
@@ -112,6 +115,15 @@ export function parseSandboxProfile(value?: string): SandboxProfile | undefined 
     throw new Error(`--profile must be one of: ${profiles.join(", ")}`);
   }
   return value as SandboxProfile;
+}
+
+export function parseConversationMode(value?: string): ConversationMode | undefined {
+  if (value === undefined) return undefined;
+  const modes: ConversationMode[] = ["stateful", "stateless", "hybrid"];
+  if (!modes.includes(value as ConversationMode)) {
+    throw new Error(`--conversation-mode must be one of: ${modes.join(", ")}`);
+  }
+  return value as ConversationMode;
 }
 
 async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void> {
@@ -168,7 +180,8 @@ function localSessionStatus(opts: CliOpts): void {
     maxSteps: parseMaxSteps(opts.maxSteps),
     serverTools: toolOverrides.serverTools,
     enableWebSearch: toolOverrides.enableWebSearch,
-    enableXSearch: toolOverrides.enableXSearch
+    enableXSearch: toolOverrides.enableXSearch,
+    conversationMode: parseConversationMode(opts.conversationMode)
   });
   console.log(formatSessionStatus(config));
 }
