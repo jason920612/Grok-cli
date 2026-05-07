@@ -49,10 +49,18 @@ class FailureTracker {
   }
 }
 
+function getShellExitCode(toolName: string, data: unknown): number | undefined {
+  if (toolName !== "run_shell" && toolName !== "start_background_command") return undefined;
+  const d = data as Record<string, unknown> | undefined;
+  return typeof d?.exitCode === "number" ? d.exitCode : undefined;
+}
+
 function normalizeFailureKey(toolName: string, args: string): string {
   try {
-    const parsed = JSON.parse(args || "{}");
-    return `${toolName}:${JSON.stringify(parsed)}`;
+    const parsed = JSON.parse(args || "{}") as Record<string, unknown>;
+    // Strip annotation-only fields that models vary between calls but don't change the action
+    const { reason: _r, description: _d, ...actionArgs } = parsed;
+    return `${toolName}:${JSON.stringify(actionArgs)}`;
   } catch {
     return `${toolName}:${args}`;
   }
@@ -333,8 +341,13 @@ export class AgentLoop {
 
     if (call.name === "apply_patch" && result.ok) hasModifiedFiles.value = true;
 
-    if (!result.ok) {
-      failureTracker.record(call.name, call.arguments ?? "{}", result.error.message);
+    const shellExitCode = result.ok ? getShellExitCode(call.name, result.data) : undefined;
+    const isEffectiveFailure = !result.ok || (shellExitCode !== undefined && shellExitCode !== 0);
+    if (isEffectiveFailure) {
+      const errorMsg = !result.ok
+        ? result.error.message
+        : `Command exited with code ${shellExitCode}: ${String((result.data as any)?.stdout ?? "").slice(0, 200)}`;
+      failureTracker.record(call.name, call.arguments ?? "{}", errorMsg);
     }
 
     toolActionSummaries.push({
