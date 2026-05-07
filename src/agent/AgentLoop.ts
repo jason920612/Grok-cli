@@ -133,17 +133,22 @@ export class AgentLoop {
           break;
         }
 
-        if (planOnlyReprompts < 2 && shouldContinueAfterPlanOnlyResponse(parsed.finalText, task, toolActionSummaries.length)) {
-          planOnlyReprompts += 1;
-          console.log(parsed.finalText);
-          console.log("Grok described intent without acting. Requesting tool call.");
-          pendingInput = this.buildCorrectionInput(
-            task,
-            "Invalid response: you described an intention but did not call a tool. Return exactly one tool call or a final answer. Describing intent is not evidence.",
-            useStateless ? situationMemory : undefined
-          );
-          step += 1;
-          continue;
+        if (shouldContinueAfterPlanOnlyResponse(parsed.finalText, task, toolActionSummaries.length)) {
+          if (planOnlyReprompts < 2) {
+            planOnlyReprompts += 1;
+            console.log(parsed.finalText);
+            console.log("Grok described intent without acting. Requesting tool call.");
+            pendingInput = this.buildCorrectionInput(
+              task,
+              "Invalid response: you described an intention but did not call a tool. Return exactly one tool call or a final answer. Describing intent is not evidence.",
+              useStateless ? situationMemory : undefined
+            );
+            step += 1;
+            continue;
+          }
+          // budget exhausted — fail closed, never accept narrated intent as a final answer
+          finalText = "[agent stopped: model repeatedly provided intent without tool action]";
+          break;
         }
 
         // candidate final answer — run verifier if enabled
@@ -173,6 +178,18 @@ export class AgentLoop {
       }
 
       planOnlyReprompts = 0;
+
+      // output-protocol guard: exactly one tool call per non-final turn
+      if (parsed.functionCalls.length > 1) {
+        console.log(`[guard] Rejected ${parsed.functionCalls.length} tool calls in one turn — protocol requires exactly one.`);
+        pendingInput = this.buildCorrectionInput(
+          task,
+          `Invalid: you returned ${parsed.functionCalls.length} tool calls in one turn. Exactly one tool call per turn is required. Return exactly one tool call.`,
+          useStateless ? situationMemory : undefined
+        );
+        step += 1;
+        continue;
+      }
 
       // intermediate claim audit: scan planning text alongside tool calls
       if (parsed.finalText) {

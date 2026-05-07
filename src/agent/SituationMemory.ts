@@ -6,6 +6,8 @@ export type ToolEvidence = {
   /** Raw output from the tool result, NOT a model interpretation. */
   rawOutput: string;
   ok: boolean;
+  /** verified = tool succeeded and output is a direct observation; uncertain = tool failed */
+  confidence: "verified" | "uncertain";
   filePath?: string;
   lineRange?: { start: number; end: number };
   exitCode?: number;
@@ -44,6 +46,7 @@ export class SituationMemory {
       argsText,
       rawOutput: rawOutput.slice(0, 800),
       ok,
+      confidence: ok ? "verified" : "uncertain",
       ...extractProvenance(tool, args, rawOutput)
     });
   }
@@ -127,7 +130,14 @@ export class SituationMemory {
     if (okEvidence.length > 0) {
       lines.push("\nVerified runtime observations (raw tool output — NOT model interpretations):");
       for (const ev of okEvidence) {
-        lines.push(`  [step ${ev.step}] ${ev.tool}${formatProvenance(ev)}: ${ev.rawOutput.slice(0, 200)}`);
+        lines.push(`  [step ${ev.step}] [${ev.confidence.toUpperCase()}] ${ev.tool}${formatProvenance(ev)}: ${ev.rawOutput.slice(0, 200)}`);
+      }
+    }
+    const failedEvidence = this.evidence.filter((e) => !e.ok).slice(-4);
+    if (failedEvidence.length > 0) {
+      lines.push("\nFailed/uncertain observations:");
+      for (const ev of failedEvidence) {
+        lines.push(`  [step ${ev.step}] [${ev.confidence.toUpperCase()}] ${ev.tool}${formatProvenance(ev)}: ${ev.rawOutput.slice(0, 100)}`);
       }
     }
 
