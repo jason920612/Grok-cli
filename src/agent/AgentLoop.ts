@@ -11,7 +11,7 @@ import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import { buildModelInput } from "./modelInputBuilder.js";
 import { finalAnswerGate } from "./finalAnswerGate.js";
 import { SituationMemory } from "./SituationMemory.js";
-import { runVerifier } from "./Verifier.js";
+import { runVerifier, type VerifierResult } from "./Verifier.js";
 
 type ToolActionSummary = {
   step: number;
@@ -37,7 +37,6 @@ export class AgentLoop {
     const isHybrid = this.config.conversationMode === "hybrid";
 
     let previousResponseId: string | undefined;
-    // tracks whether the next hybrid call should be a fresh stateless call (after a reset)
     let hybridForceStateless = false;
     let finalText = "";
     const usedToolNames = new Set<string>();
@@ -45,6 +44,7 @@ export class AgentLoop {
     let planOnlyReprompts = 0;
     let emptyResponseRetries = 0;
     let verifierReprompts = 0;
+    let verifierCrashCount = 0;
     const hasModifiedFiles = { value: false };
     const situationMemory = new SituationMemory();
 
@@ -57,7 +57,7 @@ export class AgentLoop {
       throwIfAborted(signal);
       this.context.nextStep(task);
 
-      // hybrid: reset stateful context after thresholds
+      // hybrid: reset stateful chain after thresholds
       if (isHybrid && previousResponseId && !hybridForceStateless) {
         const shouldReset =
           step > this.config.hybridResetAfterSteps ||
@@ -92,14 +92,14 @@ export class AgentLoop {
       previousResponseId = parsed.id || previousResponseId;
       hybridForceStateless = false;
 
-      // watchdog: empty response with no tool calls and no text
+      // watchdog: empty response
       if (!parsed.finalText && parsed.functionCalls.length === 0) {
         if (emptyResponseRetries < 1) {
           emptyResponseRetries += 1;
           console.log("[watchdog] Empty response detected. Nudging model to continue.");
           pendingInput = this.buildCorrectionInput(
             task,
-            "Your previous response was empty. Emit exactly one tool call or a final answer. Do not respond with only whitespace.",
+            "Your previous response was empty. Emit exactly one tool call or a final answer.",
             useStateless ? situationMemory : undefined
           );
           step += 1;
@@ -110,15 +110,15 @@ export class AgentLoop {
       }
       emptyResponseRetries = 0;
 
-      // narration guard: model described intent but did not call a tool
+      // narration guard: intent described but no tool call
       if (parsed.functionCalls.length === 0) {
         if (planOnlyReprompts < 2 && shouldContinueAfterPlanOnlyResponse(parsed.finalText, task, toolActionSummaries.length)) {
           planOnlyReprompts += 1;
           console.log(parsed.finalText);
-          console.log("Grok provided a plan without tool calls; requesting actual tool use.");
+          console.log("Grok described intent without acting. Requesting tool call.");
           pendingInput = this.buildCorrectionInput(
             task,
-            "Invalid response: you described an intention but did not call a tool. Return exactly one tool call or a final answer. Describing intent is not the same as acting.",
+            "Invalid response: you described an intention but did not call a tool. Return exactly one tool call or a final answer. Describing intent is not evidence.",
             useStateless ? situationMemory : undefined
           );
           step += 1;
@@ -126,15 +126,31 @@ export class AgentLoop {
         }
 
         // candidate final answer — run verifier if enabled
-        if (this.config.enableVerifier && verifierReprompts < 2 && parsed.finalText) {
-          const verifierResult = await this.verify(task, situationMemory, parsed.finalText, signal);
-          if (verifierResult && verifierResult.verdict !== "pass") {
-            verifierReprompts += 1;
-            const correction = buildVerifierCorrection(verifierResult);
-            console.log(`[verifier] verdict=${verifierResult.verdict} confidence=${verifierResult.confidence}`);
-            pendingInput = this.buildCorrectionInput(task, correction, useStateless ? situationMemory : undefined);
-            step += 1;
-            continue;
+        if (this.config.enableVerifier && parsed.finalText) {
+          const accepted = await this.runVerifierLoop(
+            task,
+            situationMemory,
+            parsed.finalText,
+            verifierReprompts,
+            verifierCrashCount,
+            useStateless,
+            step,
+            signal
+          );
+          if (!accepted.pass) {
+            if (accepted.crashed) {
+              verifierCrashCount += 1;
+              if (verifierCrashCount >= 2) {
+                finalText = `[agent stopped: verifier failed to produce a verdict after ${verifierCrashCount} attempts. Refusing to accept unverified final answer. Last error: ${accepted.reason}]`;
+                break;
+              }
+            }
+            if (accepted.correction) {
+              verifierReprompts += 1;
+              pendingInput = this.buildCorrectionInput(task, accepted.correction, useStateless ? situationMemory : undefined);
+              step += 1;
+              continue;
+            }
           }
         }
 
@@ -146,16 +162,16 @@ export class AgentLoop {
       if (parsed.finalText) console.log(parsed.finalText);
       console.log(formatToolBatch(step, parsed.functionCalls.map((call) => call.name)));
 
-      // blind-retry guard: block repeated failed tool+args before executing
+      // blind-retry guard
       const blocked = this.findBlockedCall(parsed.functionCalls, situationMemory);
       if (blocked) {
         let args: unknown;
         try { args = JSON.parse(blocked.arguments || "{}"); } catch { args = {}; }
         const record = situationMemory.hasRecentlyFailed(blocked.name, args)!;
-        console.log(`[guard] Blocking blind retry of ${blocked.name} (failed ${record.attempts}x). Injecting failure context.`);
+        console.log(`[guard] Blocking blind retry of ${blocked.name} (failed ${record.attempts}x).`);
         pendingInput = this.buildCorrectionInput(
           task,
-          `BLIND RETRY BLOCKED:\nTool: ${record.tool}\nError: ${record.error}\nAttempts: ${record.attempts}\nConstraint: Do not retry the exact same action unchanged. Choose a different approach: narrow the scope, inspect logs, or change strategy.`,
+          `BLIND RETRY BLOCKED:\nTool: ${record.tool}\nError: ${record.error}\nAttempts: ${record.attempts}\nConstraint: Do not retry the exact same action unchanged. Choose a different approach.`,
           useStateless ? situationMemory : undefined
         );
         step += 1;
@@ -172,15 +188,16 @@ export class AgentLoop {
         signal
       );
 
-      // in stateless/hybrid: rebuild fresh prompt from updated situation memory
-      // do NOT pass raw function_call_output protocol items without previous_response_id context
+      // in stateless/hybrid: rebuild from situation memory — do NOT pass raw
+      // function_call_output protocol items into a fresh call without previous_response_id
       if (useStateless || isStateless || isHybrid) {
         pendingInput = this.buildStatelessPrompt(task, situationMemory);
       } else {
-        // stateful: xAI API tracks conversation via previous_response_id
-        // just send an empty continuation signal — the API replays context
         pendingInput = [];
       }
+
+      // if verifier is enabled, check for pending verifications in the snapshot
+      // (pending verifications are already embedded in the situation snapshot for the executor to see)
 
       step += 1;
     }
@@ -198,6 +215,52 @@ export class AgentLoop {
       : "";
     const suffix = `${actionSection}${diffSection}\n\n[Final checks]\nBackground: ${gate.backgroundStatus}\nDiff checked: ${gate.diffChecked ? "yes" : "not needed"}`;
     return finalText ? `${finalText}${suffix}` : `Stopped after max steps without a final model message.${suffix}`;
+  }
+
+  private async runVerifierLoop(
+    task: string,
+    memory: SituationMemory,
+    executorClaim: string,
+    reprompts: number,
+    crashCount: number,
+    useStateless: boolean,
+    step: number,
+    signal?: AbortSignal
+  ): Promise<{ pass: boolean; correction?: string; crashed?: boolean; reason?: string }> {
+    if (reprompts >= 2) return { pass: true }; // max verifier rounds reached, accept
+
+    const verifierModel = this.config.verifierModel || this.config.model;
+    const result = await runVerifier(
+      this.client,
+      verifierModel,
+      task,
+      memory.getEvidence(),
+      memory.getUnresolvedVerifications(),
+      executorClaim,
+      signal
+    );
+
+    if (!result.ok) {
+      console.log(`[verifier] ${result.reason}`);
+      return { pass: false, crashed: true, reason: result.reason };
+    }
+
+    const vr = result.result;
+    console.log(`[verifier] verdict=${vr.verdict} confidence=${vr.confidence}`);
+
+    if (vr.verdict === "pass") {
+      if (vr.resolved_claims?.length) memory.resolvePendingVerifications(vr.resolved_claims);
+      return { pass: true };
+    }
+
+    // add unsupported assumptions to pending verification queue
+    for (const assumption of vr.unsupported_assumptions) {
+      memory.addPendingVerification(assumption.claim, assumption.required_verification, step);
+    }
+    if (vr.resolved_claims?.length) memory.resolvePendingVerifications(vr.resolved_claims);
+
+    const correction = buildVerifierCorrection(vr);
+    return { pass: false, correction };
   }
 
   private buildInput(task: string, memory?: SituationMemory): string {
@@ -238,14 +301,6 @@ export class AgentLoop {
       try { args = JSON.parse(call.arguments || "{}"); } catch { return false; }
       return memory.hasRecentlyFailed(call.name, args) !== undefined;
     });
-  }
-
-  private async verify(task: string, memory: SituationMemory, executorClaim: string, signal?: AbortSignal) {
-    try {
-      return await runVerifier(this.client, this.config.model, task, memory.getEvidence(), executorClaim, signal);
-    } catch {
-      return null;
-    }
   }
 
   private async executeToolBatch(
@@ -295,21 +350,23 @@ export class AgentLoop {
       toolActionSummaries.push({ step, name: call.name, ok: false, summary: `JSON parse error: ${msg}` });
       return;
     }
+
     const result = await this.tools.execute(call.name, args, this.toolCtx);
     throwIfAborted(signal);
     if (call.name === "apply_patch" && result.ok) hasModifiedFiles.value = true;
 
-    const summary = summarizeToolResult(result);
-    toolActionSummaries.push({ step, name: call.name, ok: result.ok, summary });
-
-    const outputExcerpt = result.ok
-      ? (result.summary ?? JSON.stringify(result.data).slice(0, 600))
+    // rawOutput is the actual tool result — NOT a model-generated summary
+    const rawOutput = result.ok
+      ? JSON.stringify(result.data).slice(0, 800)
       : `ERROR: ${result.error.message}`;
 
-    situationMemory.recordEvidence(call.name, args, outputExcerpt, result.ok, step);
-    if (!result.ok) {
-      situationMemory.recordFailure(call.name, args, result.error.message, step);
-    }
+    const summary = result.ok
+      ? (result.summary ?? JSON.stringify(result.data).slice(0, 240))
+      : result.error.message;
+
+    toolActionSummaries.push({ step, name: call.name, ok: result.ok, summary });
+    situationMemory.recordEvidence(call.name, args, rawOutput, result.ok, step);
+    if (!result.ok) situationMemory.recordFailure(call.name, args, result.error.message, step);
 
     this.context.add({
       type: "shell_output",
@@ -320,45 +377,38 @@ export class AgentLoop {
   }
 }
 
-function buildVerifierCorrection(result: Awaited<ReturnType<typeof runVerifier>>): string {
-  if (!result) return "";
+function buildVerifierCorrection(vr: VerifierResult): string {
   const lines = [
-    `VERIFIER AUDIT — verdict: ${result.verdict} (confidence: ${result.confidence})`,
-    `Reason: ${result.reason}`
+    `VERIFIER AUDIT — verdict: ${vr.verdict} (confidence: ${vr.confidence})`,
+    `Reason: ${vr.reason}`
   ];
-  if (result.unsupported_assumptions.length > 0) {
-    lines.push("\nUnsupported assumptions detected:");
-    for (const a of result.unsupported_assumptions) {
-      lines.push(`- Claim: ${a.claim}`);
+  if (vr.unsupported_assumptions.length > 0) {
+    lines.push("\nUnsupported assumptions — you must verify these with tool calls:");
+    for (const a of vr.unsupported_assumptions) {
+      lines.push(`  Claim: ${a.claim}`);
       lines.push(`  Why unsupported: ${a.why_unsupported}`);
       lines.push(`  Required verification: ${a.required_verification}`);
     }
   }
-  if (result.missing_evidence.length > 0) {
+  if (vr.missing_evidence.length > 0) {
     lines.push("\nMissing evidence:");
-    for (const e of result.missing_evidence) lines.push(`- ${e}`);
+    for (const e of vr.missing_evidence) lines.push(`  - ${e}`);
   }
-  if (result.required_next_actions.length > 0) {
+  if (vr.required_next_actions.length > 0) {
     lines.push("\nRequired next actions:");
-    for (const a of result.required_next_actions) lines.push(`- ${a}`);
+    for (const a of vr.required_next_actions) lines.push(`  - ${a}`);
   }
-  lines.push("\nThe verifier found unsupported claims. You must perform the required tool verifications before providing a final answer.");
+  lines.push("\nCompliance language ('I verified', 'I checked') is NOT evidence. Perform the required tool calls.");
   return lines.join("\n");
 }
 
 function formatToolBatch(step: number, toolNames: string[]): string {
-  const unique = [...new Set(toolNames)];
-  return `Grok requested tool batch ${step}: ${unique.join(", ")}`;
-}
-
-function summarizeToolResult(result: Awaited<ReturnType<ToolRegistry["execute"]>>): string {
-  if (!result.ok) return result.error.message;
-  return result.summary ?? JSON.stringify(result.data).slice(0, 240);
+  return `Grok requested tool batch ${step}: ${[...new Set(toolNames)].join(", ")}`;
 }
 
 function formatActionSummary(actions: ToolActionSummary[]): string {
   return actions
-    .map((action) => `- step ${action.step}: ${action.name} ${action.ok ? "ok" : "failed"} - ${action.summary}`)
+    .map((a) => `- step ${a.step}: ${a.name} ${a.ok ? "ok" : "failed"} - ${a.summary}`)
     .join("\n");
 }
 
@@ -367,7 +417,7 @@ export function shouldContinueAfterPlanOnlyResponse(text: string, task: string, 
   const taskLower = task.toLowerCase();
   const saysItWillUseTools = /(brief plan|before first tool call|i'?ll now|i will now|proceeding to|run the first tool|call .*tool|use .*tool|工具)/i.test(text);
   const englishActionTask = /\b(commit|push|edit|modify|fix|write|create|delete|run|test|build|review|issue|pr)\b/i.test(taskLower);
-  const localizedActionTask = ["修 bug", "修改", "修正", "建立", "新增", "刪除", "執行", "执行", "測試", "测试", "建置", "提交", "推送", "審核", "審核", "開pr", "開 issue"].some((keyword) => taskLower.includes(keyword));
+  const localizedActionTask = ["修 bug", "修改", "修正", "建立", "新增", "刪除", "執行", "执行", "測試", "测试", "建置", "提交", "推送", "審核", "審核", "開pr", "開 issue"].some((k) => taskLower.includes(k));
   const claimsNoCapability = /no .*tool available|there is no .*tool|tools limited to/i.test(text.toLowerCase());
   return actionCount === 0 && (englishActionTask || localizedActionTask) && (saysItWillUseTools || claimsNoCapability);
 }

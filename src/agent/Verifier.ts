@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import { createResponse } from "../api/responsesClient.js";
-import type { ToolEvidence } from "./SituationMemory.js";
+import type { ToolEvidence, PendingVerification } from "./SituationMemory.js";
 
 export type VerifierVerdict = "pass" | "fail" | "needs_more_evidence";
 
@@ -19,86 +19,109 @@ export type VerifierResult = {
   missing_evidence: string[];
   required_next_actions: string[];
   confidence: "high" | "medium" | "low";
+  /** Claims that are now resolved (backed by evidence) — used to clear pending verifications. */
+  resolved_claims?: string[];
 };
 
-const VERIFIER_PROMPT = `You are an independent evidence auditor for a coding agent runtime. Your job is to determine whether the executor's final claim is supported by concrete runtime evidence.
+const VERIFIER_SYSTEM_PROMPT = `You are an independent evidence auditor for a coding agent runtime. Your sole job is to determine whether the executor's claims are supported by concrete runtime evidence.
 
-Rules:
-- Do not trust the executor's self-assessment or language like "I verified" or "I checked".
-- Only trust the runtime evidence listed below (tool calls and their outputs).
-- Claims about file contents must be backed by read_file_range evidence.
-- Claims that tests pass must be backed by a test command with exit code 0.
-- Claims that patches were applied must be backed by apply_patch success output.
-- If a claim cannot be traced to runtime evidence, it is an unsupported assumption.
+Rules you must follow:
+1. Do NOT trust the executor's self-assessment or compliance language ("I verified", "I checked", "I confirmed").
+2. Compliance language is NOT evidence. Only tool results are evidence.
+3. Claims about file contents must be backed by a read_file_range result with file path and line range.
+4. Claims that tests pass must be backed by a run_shell result with exit code 0.
+5. Claims that patches were applied must be backed by an apply_patch result with changed file list.
+6. Claims about environment/dependency state must be backed by tool observation.
+7. If a claim cannot be traced to a concrete tool result in the evidence list, it is unsupported.
 
-Respond with a JSON object only, no other text. Use this exact schema:
+Respond with a JSON object only. No prose before or after the JSON. Use this exact schema:
 {
   "verdict": "pass" | "fail" | "needs_more_evidence",
-  "reason": "short explanation",
-  "evidence_backed_facts": ["fact backed by evidence", ...],
-  "executor_claims": ["claim made by executor", ...],
+  "reason": "one sentence",
+  "evidence_backed_facts": ["..."],
+  "executor_claims": ["..."],
   "unsupported_assumptions": [
-    {
-      "claim": "...",
-      "why_unsupported": "...",
-      "required_verification": "..."
-    }
+    { "claim": "...", "why_unsupported": "...", "required_verification": "..." }
   ],
-  "missing_evidence": ["what evidence is missing", ...],
-  "required_next_actions": ["what the agent should do next", ...],
+  "missing_evidence": ["..."],
+  "required_next_actions": ["..."],
+  "resolved_claims": ["..."],
   "confidence": "high" | "medium" | "low"
 }`;
+
+export type VerifierRunResult =
+  | { ok: true; result: VerifierResult }
+  | { ok: false; reason: string };
 
 export async function runVerifier(
   client: OpenAI,
   model: string,
   task: string,
   evidence: ToolEvidence[],
+  pendingVerifications: PendingVerification[],
   executorClaim: string,
   signal?: AbortSignal
-): Promise<VerifierResult> {
+): Promise<VerifierRunResult> {
   const evidenceText = evidence.length > 0
-    ? evidence.map((e) =>
-        `[step ${e.step}] Tool: ${e.tool}\nArgs: ${e.argsText}\nStatus: ${e.ok ? "ok" : "failed"}\nOutput:\n${e.outputExcerpt}`
-      ).join("\n---\n")
+    ? evidence.map((e) => {
+        const provenance = [
+          e.filePath ? `file=${e.filePath}` : null,
+          e.lineRange ? `lines=${e.lineRange.start}-${e.lineRange.end}` : null,
+          e.exitCode !== undefined ? `exit=${e.exitCode}` : null,
+          e.changedFiles?.length ? `changed=${e.changedFiles.join(",")}` : null
+        ].filter(Boolean).join(" ");
+        return `[step ${e.step}] Tool: ${e.tool} | Status: ${e.ok ? "ok" : "failed"}${provenance ? ` | ${provenance}` : ""}\nArgs: ${e.argsText}\nRaw output:\n${e.rawOutput}`;
+      }).join("\n---\n")
     : "No tool evidence recorded.";
 
-  const input = `${VERIFIER_PROMPT}
+  const pendingText = pendingVerifications.length > 0
+    ? "\nPreviously identified pending verifications:\n" + pendingVerifications.map(
+        (p) => `  - ${p.claim} (required: ${p.requiredAction})`
+      ).join("\n")
+    : "";
+
+  const input = `${VERIFIER_SYSTEM_PROMPT}
 
 ORIGINAL TASK:
 ${task}
 
-RUNTIME EVIDENCE:
+RUNTIME EVIDENCE (raw tool results — these are the only facts):
 ${evidenceText}
+${pendingText}
 
-EXECUTOR FINAL CLAIM (treat as unverified until you audit it):
+EXECUTOR FINAL CLAIM (treat as unverified — audit against the evidence above):
 ${executorClaim}`;
 
-  const response = await createResponse(client, {
-    model,
-    input,
-    tools: [],
-    toolChoice: "none",
-    signal
-  });
+  let lastError = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await createResponse(client, {
+        model,
+        input,
+        tools: [],
+        toolChoice: "none",
+        signal
+      });
 
-  const text = extractResponseText(response);
-  try {
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("no JSON found");
-    return JSON.parse(jsonMatch[0]) as VerifierResult;
-  } catch {
-    return {
-      verdict: "needs_more_evidence",
-      reason: `Verifier returned non-JSON response: ${text.slice(0, 200)}`,
-      evidence_backed_facts: [],
-      executor_claims: [executorClaim.slice(0, 200)],
-      unsupported_assumptions: [],
-      missing_evidence: [],
-      required_next_actions: ["Re-run with explicit tool verification"],
-      confidence: "low"
-    };
+      const text = extractResponseText(response);
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        lastError = `attempt ${attempt + 1}: no JSON in response: ${text.slice(0, 200)}`;
+        continue;
+      }
+      const parsed = JSON.parse(jsonMatch[0]) as VerifierResult;
+      if (!["pass", "fail", "needs_more_evidence"].includes(parsed.verdict)) {
+        lastError = `attempt ${attempt + 1}: invalid verdict: ${parsed.verdict}`;
+        continue;
+      }
+      return { ok: true, result: parsed };
+    } catch (err) {
+      lastError = `attempt ${attempt + 1}: ${err instanceof Error ? err.message : String(err)}`;
+    }
   }
+
+  // fail closed — do not silently accept the executor's answer
+  return { ok: false, reason: `Verifier could not produce a verdict after 2 attempts. Last error: ${lastError}` };
 }
 
 function extractResponseText(response: any): string {
