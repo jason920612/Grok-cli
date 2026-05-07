@@ -21,6 +21,8 @@ export type GrokCodeConfig = {
   conversationMode: ConversationMode;
   hybridResetAfterTurns: number;
   hybridResetAfterFailures: number;
+  enableVerifier: boolean;
+  verifierMaxRetries: number;
 };
 
 export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfig> = {}): GrokCodeConfig {
@@ -41,6 +43,8 @@ export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfi
     conversationMode: "stateful",
     hybridResetAfterTurns: 10,
     hybridResetAfterFailures: 3,
+    enableVerifier: false,
+    verifierMaxRetries: 2,
     ...projectConfig,
     ...cleanOverrides
   };

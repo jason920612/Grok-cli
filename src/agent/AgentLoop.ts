@@ -10,6 +10,8 @@ import type { SkillLoader } from "../skills/SkillLoader.js";
 import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import { buildModelInput, buildStatelessInput } from "./modelInputBuilder.js";
 import { finalAnswerGate } from "./finalAnswerGate.js";
+import { VerifierAgent, buildVerifierFeedback } from "./VerifierAgent.js";
+import type { EvidenceBundle } from "./EvidenceBundle.js";
 
 type ToolActionSummary = {
   step: number;
@@ -85,6 +87,8 @@ export class AgentLoop {
     const toolActionSummaries: ToolActionSummary[] = [];
     let planOnlyReprompts = 0;
     let emptyReprompts = 0;
+    let verifierAttempts = 0;
+    let lastVerifierFeedback: string | undefined;
     const hasModifiedFiles = { value: false };
     const failureTracker = new FailureTracker();
     let chainLength = 0;
@@ -131,6 +135,7 @@ export class AgentLoop {
             (s) => `${s.name} ${s.ok ? "succeeded" : "failed"}: ${s.summary}`
           ),
           lastFailure: failureTracker.lastFailure(),
+          verifierFeedback: lastVerifierFeedback,
           toolIndex: this.toolSkills.toolIndex(),
           generalSkills: this.skillLoader.select(task),
           toolSkills: this.toolSkills.select(task, [...usedToolNames]),
@@ -196,6 +201,45 @@ export class AgentLoop {
           step++;
           continue;
         }
+
+        // Verifier gate: run before accepting the final answer
+        if (
+          this.config.enableVerifier &&
+          toolActionSummaries.length > 0 &&
+          verifierAttempts < this.config.verifierMaxRetries &&
+          step <= this.config.maxSteps
+        ) {
+          const bundle: EvidenceBundle = {
+            userTask: task,
+            executorClaim: parsed.finalText,
+            evidenceItems: toolActionSummaries.map((s) => ({
+              toolName: s.name,
+              ok: s.ok,
+              summary: s.summary
+            }))
+          };
+          const verifier = new VerifierAgent(this.client, this.config);
+          const verdict = await verifier.verify(bundle);
+          verifierAttempts++;
+
+          if (verdict.verdict !== "pass") {
+            const feedback = buildVerifierFeedback(verdict);
+            console.log(`[Verifier] ${verdict.verdict} (confidence: ${verdict.confidence}): ${verdict.reason}`);
+            lastVerifierFeedback = feedback;
+            this.context.upsert("verifier-feedback", {
+              type: "verifier_feedback",
+              content: feedback,
+              priority: 95,
+              pinned: false,
+              expiresAfterSteps: 4
+            });
+            pendingInput = feedback;
+            step++;
+            continue;
+          }
+          console.log(`[Verifier] pass (confidence: ${verdict.confidence})`);
+        }
+
         finalText = parsed.finalText;
         break;
       }

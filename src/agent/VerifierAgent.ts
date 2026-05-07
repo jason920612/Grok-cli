@@ -1,0 +1,176 @@
+import type OpenAI from "openai";
+import type { GrokCodeConfig } from "../config/loadConfig.js";
+import { createResponse } from "../api/responsesClient.js";
+import { parseResponse } from "../api/responseParser.js";
+import type { EvidenceBundle, VerifierVerdict, UnsupportedAssumption } from "./EvidenceBundle.js";
+
+const VERIFIER_PROMPT = `You are an independent verifier for a coding agent. You did not participate in the previous work.
+
+Your only job is to determine whether the executor's claimed result is actually supported by the collected evidence.
+
+Rules:
+- Only trust tool-backed evidence: file reads, shell command outputs, patches applied, test results, git operations.
+- Do not trust the executor's claim, reasoning, intentions, or self-assessment at face value.
+- Do not self-certify compliance with these rules; only evidence references count.
+- A failed tool call (ok=false) proves failure, not success.
+- Claims about current workspace state must be traceable to at least one tool result in the evidence list.
+- If the executor expresses intent ("I will check...") but the evidence shows no corresponding tool call, that is an unsupported assumption.
+
+Return ONLY a JSON object — no other text, no markdown fences:
+{
+  "verdict": "pass" | "fail" | "needs_more_evidence",
+  "reason": "one-sentence explanation",
+  "unsupportedClaims": ["..."],
+  "unsupportedAssumptions": [
+    {
+      "claim": "assumption the executor made",
+      "whyUnsupported": "no tool call in evidence confirms this",
+      "requiredVerification": "which tool call would confirm it"
+    }
+  ],
+  "missingEvidence": ["..."],
+  "requiredNextActions": ["specific tool call or check needed"],
+  "confidence": "high" | "medium" | "low"
+}
+
+Use "pass" only when all material claims in the executor's final answer are traceable to evidence.
+Use "needs_more_evidence" when key claims are unverified but the task might still be completable.
+Use "fail" when the evidence actively contradicts the executor's claim or critical steps were skipped.`;
+
+export class VerifierAgent {
+  constructor(
+    private readonly client: OpenAI,
+    private readonly config: GrokCodeConfig
+  ) {}
+
+  async verify(bundle: EvidenceBundle): Promise<VerifierVerdict> {
+    const input = buildVerifierInput(bundle);
+    let response: any;
+    try {
+      response = await createResponse(this.client, {
+        model: this.config.model,
+        input,
+        tools: [],
+        toolChoice: "none"
+      });
+    } catch {
+      return fallbackVerdict("Verifier API call failed.");
+    }
+    const parsed = parseResponse(response);
+    return parseVerifierVerdict(parsed.finalText);
+  }
+}
+
+export function buildVerifierFeedback(verdict: VerifierVerdict): string {
+  const lines: string[] = [
+    `[Verifier] verdict: ${verdict.verdict} (confidence: ${verdict.confidence})`,
+    `Reason: ${verdict.reason}`
+  ];
+  if (verdict.unsupportedClaims.length > 0) {
+    lines.push("Unsupported claims:");
+    for (const claim of verdict.unsupportedClaims) lines.push(`  - ${claim}`);
+  }
+  if (verdict.unsupportedAssumptions.length > 0) {
+    lines.push("Unsupported assumptions:");
+    for (const a of verdict.unsupportedAssumptions) {
+      lines.push(`  - Claim: ${a.claim}`);
+      lines.push(`    Why unsupported: ${a.whyUnsupported}`);
+      lines.push(`    Required verification: ${a.requiredVerification}`);
+    }
+  }
+  if (verdict.missingEvidence.length > 0) {
+    lines.push("Missing evidence:");
+    for (const item of verdict.missingEvidence) lines.push(`  - ${item}`);
+  }
+  if (verdict.requiredNextActions.length > 0) {
+    lines.push("Required next actions:");
+    for (const action of verdict.requiredNextActions) lines.push(`  - ${action}`);
+  }
+  lines.push(
+    "An independent verifier reviewed the evidence and found the above issues.",
+    "Address each required next action using tools before providing a final answer.",
+    "Do not re-assert the same claim without first collecting the missing evidence."
+  );
+  return lines.join("\n");
+}
+
+function buildVerifierInput(bundle: EvidenceBundle): string {
+  const evidenceText = bundle.evidenceItems.length > 0
+    ? bundle.evidenceItems
+        .map((item, i) => `${i + 1}. [${item.ok ? "ok" : "failed"}] ${item.toolName}(${item.args ?? ""}) => ${item.summary}`)
+        .join("\n")
+    : "No tool calls recorded.";
+
+  return `${VERIFIER_PROMPT}
+
+<task>
+${bundle.userTask}
+</task>
+
+<evidence>
+${evidenceText}
+</evidence>
+
+<claim>
+${bundle.executorClaim}
+</claim>`;
+}
+
+function parseVerifierVerdict(text: string): VerifierVerdict {
+  const trimmed = text.trim();
+  const jsonStart = trimmed.indexOf("{");
+  const jsonEnd = trimmed.lastIndexOf("}");
+  if (jsonStart === -1 || jsonEnd === -1) return fallbackVerdict("Verifier returned non-JSON output.");
+  try {
+    const raw = JSON.parse(trimmed.slice(jsonStart, jsonEnd + 1)) as Record<string, unknown>;
+    return {
+      verdict: parseVerdict(raw.verdict),
+      reason: String(raw.reason ?? "No reason provided."),
+      unsupportedClaims: parseStringArray(raw.unsupportedClaims),
+      unsupportedAssumptions: parseAssumptions(raw.unsupportedAssumptions),
+      missingEvidence: parseStringArray(raw.missingEvidence),
+      requiredNextActions: parseStringArray(raw.requiredNextActions),
+      confidence: parseConfidence(raw.confidence)
+    };
+  } catch {
+    return fallbackVerdict("Verifier returned malformed JSON.");
+  }
+}
+
+function parseVerdict(value: unknown): VerifierVerdict["verdict"] {
+  if (value === "pass" || value === "fail" || value === "needs_more_evidence") return value;
+  return "needs_more_evidence";
+}
+
+function parseConfidence(value: unknown): VerifierVerdict["confidence"] {
+  if (value === "high" || value === "medium" || value === "low") return value;
+  return "low";
+}
+
+function parseStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function parseAssumptions(value: unknown): UnsupportedAssumption[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map((item) => ({
+      claim: String(item.claim ?? ""),
+      whyUnsupported: String(item.whyUnsupported ?? ""),
+      requiredVerification: String(item.requiredVerification ?? "")
+    }));
+}
+
+function fallbackVerdict(reason: string): VerifierVerdict {
+  return {
+    verdict: "needs_more_evidence",
+    reason,
+    unsupportedClaims: [],
+    unsupportedAssumptions: [],
+    missingEvidence: [],
+    requiredNextActions: [],
+    confidence: "low"
+  };
+}
