@@ -6,14 +6,13 @@ export type ToolEvidence = {
   /** Raw output from the tool result, NOT a model interpretation. */
   rawOutput: string;
   ok: boolean;
-  // Rich provenance fields populated from tool args/results
   filePath?: string;
   lineRange?: { start: number; end: number };
   exitCode?: number;
   changedFiles?: string[];
 };
 
-/** An unsupported assumption that must be verified before it can enter durable memory. */
+/** An unsupported assumption that must be verified via tool evidence before it can be accepted. */
 export type PendingVerification = {
   claim: string;
   requiredAction: string;
@@ -34,26 +33,31 @@ export class SituationMemory {
   private pendingVerifications: PendingVerification[] = [];
   private failures = new Map<string, FailureRecord>();
   private priorActions: string[] = [];
+  private intermediateAuditFailures = 0;
 
   recordEvidence(tool: string, args: unknown, rawOutput: string, ok: boolean, step: number): void {
-    const argsText = JSON.stringify(args).slice(0, 120);
+    const argsText = stableStringify(tool, args).slice(0, 120);
     this.priorActions.push(`${tool}(${argsText})`);
-
-    const ev: ToolEvidence = {
+    this.evidence.push({
       step,
       tool,
       argsText,
       rawOutput: rawOutput.slice(0, 800),
       ok,
-      ...this.extractProvenance(tool, args, rawOutput)
-    };
-    this.evidence.push(ev);
+      ...extractProvenance(tool, args, rawOutput)
+    });
+  }
+
+  recordAuditFailure(): void {
+    this.intermediateAuditFailures += 1;
+  }
+
+  hasAuditFailures(): boolean {
+    return this.intermediateAuditFailures > 0;
   }
 
   addPendingVerification(claim: string, requiredAction: string, step: number): void {
-    const alreadyPending = this.pendingVerifications.some(
-      (p) => !p.resolved && p.claim === claim
-    );
+    const alreadyPending = this.pendingVerifications.some((p) => !p.resolved && p.claim === claim);
     if (!alreadyPending) {
       this.pendingVerifications.push({ claim, requiredAction, addedAtStep: step, resolved: false });
     }
@@ -77,7 +81,7 @@ export class SituationMemory {
       existing.error = error;
       existing.lastAttemptStep = step;
     } else {
-      this.failures.set(key, { tool, normalizedArgs: JSON.stringify(args), error, attempts: 1, lastAttemptStep: step });
+      this.failures.set(key, { tool, normalizedArgs: stableStringify(tool, args), error, attempts: 1, lastAttemptStep: step });
     }
   }
 
@@ -107,26 +111,29 @@ export class SituationMemory {
     const lines: string[] = [];
 
     lines.push("EPISTEMIC STANCE: Current workspace state is UNKNOWN until observed via tools.");
-    lines.push("Do not infer or assume file contents, test results, or environment state.");
     lines.push("Tool success is verified. Your interpretation of tool output is NOT automatically verified.");
+    lines.push("Compliance language ('I verified', 'I checked') is NOT evidence.");
+
+    if (this.intermediateAuditFailures > 0) {
+      lines.push(`\nWARNING: ${this.intermediateAuditFailures} intermediate claim audit(s) failed. Final verification will be stricter.`);
+    }
 
     if (this.priorActions.length > 0) {
-      lines.push("\nPrior runtime actions (observed by the local agent runtime, not the user):");
+      lines.push("\nPrior runtime actions (observed by the agent runtime, not the user):");
       for (const a of this.priorActions.slice(-20)) lines.push(`  - ${a}`);
     }
 
     const okEvidence = this.evidence.filter((e) => e.ok).slice(-8);
     if (okEvidence.length > 0) {
-      lines.push("\nVerified runtime observations (raw tool results — NOT model interpretations):");
+      lines.push("\nVerified runtime observations (raw tool output — NOT model interpretations):");
       for (const ev of okEvidence) {
-        const provenance = this.formatProvenance(ev);
-        lines.push(`  [step ${ev.step}] ${ev.tool}${provenance}: ${ev.rawOutput.slice(0, 200)}`);
+        lines.push(`  [step ${ev.step}] ${ev.tool}${formatProvenance(ev)}: ${ev.rawOutput.slice(0, 200)}`);
       }
     }
 
     const pending = this.getUnresolvedVerifications();
     if (pending.length > 0) {
-      lines.push("\nPENDING VERIFICATIONS — you MUST complete these before submitting a final answer:");
+      lines.push("\nPENDING VERIFICATIONS — MUST be resolved with tool evidence before final answer:");
       for (const pv of pending) {
         lines.push(`  - Claim: ${pv.claim}`);
         lines.push(`    Required action: ${pv.requiredAction}`);
@@ -136,52 +143,60 @@ export class SituationMemory {
     const lastFailure = this.getLastFailure();
     if (lastFailure) {
       lines.push("\nLast failure — MUST NOT repeat blindly:");
-      lines.push(`  Tool: ${lastFailure.tool}`);
-      lines.push(`  Error: ${lastFailure.error}`);
-      lines.push(`  Attempts: ${lastFailure.attempts}`);
-      lines.push("  Constraint: Choose a different approach. Do not retry the exact same action.");
+      lines.push(`  Tool: ${lastFailure.tool} | Error: ${lastFailure.error} | Attempts: ${lastFailure.attempts}`);
+      lines.push("  Constraint: Choose a different approach.");
     }
 
     lines.push("\nEpistemic constraints:");
-    lines.push("  - File contents: must be backed by read_file_range evidence (tool + path + lines).");
-    lines.push("  - Tests passing: must be backed by a test command with exit code 0.");
+    lines.push("  - File contents: must be backed by read_file_range (path + line range).");
+    lines.push("  - Tests passing: must be backed by run_shell with exit code 0.");
     lines.push("  - Patches applied: must be backed by apply_patch success with changed file list.");
-    lines.push("  - Compliance language ('I verified...', 'I checked...') is NOT evidence.");
 
     return lines.join("\n");
   }
 
-  private extractProvenance(tool: string, args: unknown, rawOutput: string): Partial<ToolEvidence> {
-    const a = args as Record<string, unknown>;
-    const provenance: Partial<ToolEvidence> = {};
-
-    if (tool === "read_file_range") {
-      if (typeof a.path === "string") provenance.filePath = a.path;
-      if (typeof a.start === "number" && typeof a.end === "number") {
-        provenance.lineRange = { start: a.start, end: a.end };
-      }
-    } else if (tool === "apply_patch") {
-      if (typeof a.path === "string") provenance.filePath = a.path;
-      const filesMatch = rawOutput.match(/changed files?: (.+)/i);
-      if (filesMatch) provenance.changedFiles = filesMatch[1].split(",").map((f) => f.trim());
-    } else if (tool === "run_shell" || tool === "start_background_command") {
-      const exitMatch = rawOutput.match(/exit(?:_?code)?[:\s]+(\d+)/i);
-      if (exitMatch) provenance.exitCode = parseInt(exitMatch[1], 10);
-    }
-
-    return provenance;
-  }
-
-  private formatProvenance(ev: ToolEvidence): string {
-    const parts: string[] = [];
-    if (ev.filePath) parts.push(ev.filePath);
-    if (ev.lineRange) parts.push(`L${ev.lineRange.start}-${ev.lineRange.end}`);
-    if (ev.exitCode !== undefined) parts.push(`exit=${ev.exitCode}`);
-    if (ev.changedFiles?.length) parts.push(`files=${ev.changedFiles.join(",")}`);
-    return parts.length ? `(${parts.join(" ")})` : "";
-  }
-
   private failureKey(tool: string, args: unknown): string {
-    return `${tool}::${JSON.stringify(args)}`;
+    return `${tool}::${stableStringify(tool, args)}`;
   }
+}
+
+/** Stable, normalized argument serialization to avoid bypass via key ordering or whitespace. */
+function stableStringify(tool: string, args: unknown): string {
+  if (typeof args !== "object" || args === null) return String(args);
+  const a = args as Record<string, unknown>;
+  const keys = Object.keys(a).sort();
+  const parts = keys.map((k) => {
+    let val = a[k];
+    if (typeof val === "string" && (tool === "run_shell" || tool === "start_background_command") && k === "command") {
+      val = val.replace(/\s+/g, " ").trim();
+    }
+    return `${k}:${JSON.stringify(val)}`;
+  });
+  return parts.join(",");
+}
+
+function extractProvenance(tool: string, args: unknown, rawOutput: string): Partial<ToolEvidence> {
+  const a = args as Record<string, unknown>;
+  const p: Partial<ToolEvidence> = {};
+  if (tool === "read_file_range") {
+    if (typeof a.path === "string") p.filePath = a.path;
+    if (typeof a.start === "number" && typeof a.end === "number") p.lineRange = { start: a.start, end: a.end };
+  } else if (tool === "apply_patch") {
+    if (typeof a.path === "string") p.filePath = a.path;
+    const m = rawOutput.match(/changed files?: (.+)/i);
+    if (m) p.changedFiles = m[1].split(",").map((f) => f.trim());
+  } else if (tool === "run_shell" || tool === "start_background_command") {
+    const m = rawOutput.match(/exit(?:_?code)?[:\s]+(\d+)/i);
+    if (m) p.exitCode = parseInt(m[1], 10);
+  }
+  return p;
+}
+
+function formatProvenance(ev: ToolEvidence): string {
+  const parts: string[] = [];
+  if (ev.filePath) parts.push(ev.filePath);
+  if (ev.lineRange) parts.push(`L${ev.lineRange.start}-${ev.lineRange.end}`);
+  if (ev.exitCode !== undefined) parts.push(`exit=${ev.exitCode}`);
+  if (ev.changedFiles?.length) parts.push(`files=${ev.changedFiles.join(",")}`);
+  return parts.length ? `(${parts.join(" ")})` : "";
 }

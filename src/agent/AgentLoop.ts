@@ -13,6 +13,8 @@ import { finalAnswerGate } from "./finalAnswerGate.js";
 import { SituationMemory } from "./SituationMemory.js";
 import { runVerifier, auditIntermediateClaims, type VerifierResult } from "./Verifier.js";
 
+type FunctionCallOutput = { type: "function_call_output"; call_id: string; output: string };
+
 type ToolActionSummary = {
   step: number;
   name: string;
@@ -37,7 +39,8 @@ export class AgentLoop {
     const isHybrid = this.config.conversationMode === "hybrid";
 
     let previousResponseId: string | undefined;
-    let hybridForceStateless = false;
+    // hybridIsStateless becomes true after a hybrid reset and stays true for the remainder
+    let hybridIsStateless = false;
     let finalText = "";
     const usedToolNames = new Set<string>();
     const toolActionSummaries: ToolActionSummary[] = [];
@@ -57,20 +60,20 @@ export class AgentLoop {
       throwIfAborted(signal);
       this.context.nextStep(task);
 
-      // hybrid: reset stateful chain after thresholds
-      if (isHybrid && previousResponseId && !hybridForceStateless) {
+      // hybrid: reset stateful chain after thresholds — once reset, stays stateless
+      if (isHybrid && !hybridIsStateless && previousResponseId) {
         const shouldReset =
           step > this.config.hybridResetAfterSteps ||
           situationMemory.totalFailures() >= this.config.hybridResetAfterFailures;
         if (shouldReset) {
           previousResponseId = undefined;
-          hybridForceStateless = true;
+          hybridIsStateless = true;
           pendingInput = this.buildStatelessPrompt(task, situationMemory);
-          console.log(`[hybrid] Context reset at step ${step} — rebuilding from situation memory.`);
+          console.log(`[hybrid] Context reset at step ${step} — switching to stateless mode.`);
         }
       }
 
-      const useStateless = isStateless || hybridForceStateless;
+      const useStateless = isStateless || hybridIsStateless;
 
       const spinner = ora(`Grok thinking (step ${step})`).start();
       let response: any;
@@ -90,7 +93,6 @@ export class AgentLoop {
       throwIfAborted(signal);
       const parsed = parseResponse(response);
       previousResponseId = parsed.id || previousResponseId;
-      hybridForceStateless = false;
 
       // watchdog: empty response
       if (!parsed.finalText && parsed.functionCalls.length === 0) {
@@ -110,8 +112,27 @@ export class AgentLoop {
       }
       emptyResponseRetries = 0;
 
-      // narration guard: intent described but no tool call
+      // narration guard: intent without tool call
       if (parsed.functionCalls.length === 0) {
+        // block finalization if unresolved pending verifications exist (always, no reprompt-count bypass)
+        const unresolved = situationMemory.getUnresolvedVerifications();
+        if (this.config.enableVerifier && unresolved.length > 0) {
+          if (verifierReprompts < this.config.maxVerifierReprompts) {
+            verifierReprompts += 1;
+            console.log(`[verifier] Blocking finalization: ${unresolved.length} unresolved pending verification(s).`);
+            pendingInput = this.buildCorrectionInput(
+              task,
+              buildPendingVerificationBlock(unresolved),
+              useStateless ? situationMemory : undefined
+            );
+            step += 1;
+            continue;
+          }
+          // budget exhausted — fail closed, never accept with unresolved items
+          finalText = `[agent stopped: ${unresolved.length} verification requirement(s) unresolved after max reprompts. Claims: ${unresolved.map((p) => p.claim).join("; ")}]`;
+          break;
+        }
+
         if (planOnlyReprompts < 2 && shouldContinueAfterPlanOnlyResponse(parsed.finalText, task, toolActionSummaries.length)) {
           planOnlyReprompts += 1;
           console.log(parsed.finalText);
@@ -125,46 +146,25 @@ export class AgentLoop {
           continue;
         }
 
-        // block finalization if unresolved pending verifications exist
-        const unresolved = situationMemory.getUnresolvedVerifications();
-        if (this.config.enableVerifier && unresolved.length > 0 && verifierReprompts < 2) {
-          verifierReprompts += 1;
-          console.log(`[verifier] Blocking finalization: ${unresolved.length} unresolved pending verification(s).`);
-          pendingInput = this.buildCorrectionInput(
-            task,
-            buildPendingVerificationBlock(unresolved),
-            useStateless ? situationMemory : undefined
-          );
-          step += 1;
-          continue;
-        }
-
         // candidate final answer — run verifier if enabled
         if (this.config.enableVerifier && parsed.finalText) {
-          const accepted = await this.runVerifierLoop(
-            task,
-            situationMemory,
-            parsed.finalText,
-            verifierReprompts,
-            verifierCrashCount,
-            useStateless,
-            step,
-            signal
+          const outcome = await this.runVerifierLoop(
+            task, situationMemory, parsed.finalText, verifierReprompts, verifierCrashCount, step, signal
           );
-          if (!accepted.pass) {
-            if (accepted.crashed) {
-              verifierCrashCount += 1;
-              if (verifierCrashCount >= 2) {
-                finalText = `[agent stopped: verifier failed to produce a verdict after ${verifierCrashCount} attempts. Refusing to accept unverified final answer. Last error: ${accepted.reason}]`;
-                break;
-              }
+          if (!outcome.pass) {
+            if ("stop" in outcome && outcome.stop) {
+              finalText = outcome.stopMessage;
+              break;
             }
-            if (accepted.correction) {
-              verifierReprompts += 1;
-              pendingInput = this.buildCorrectionInput(task, accepted.correction, useStateless ? situationMemory : undefined);
-              step += 1;
-              continue;
-            }
+            verifierReprompts += 1;
+            if ("crashed" in outcome && outcome.crashed) verifierCrashCount += 1;
+            pendingInput = this.buildCorrectionInput(
+              task,
+              "correction" in outcome ? outcome.correction : "[verifier error]",
+              useStateless ? situationMemory : undefined
+            );
+            step += 1;
+            continue;
           }
         }
 
@@ -173,14 +173,15 @@ export class AgentLoop {
       }
 
       planOnlyReprompts = 0;
+
+      // intermediate claim audit: scan planning text alongside tool calls
       if (parsed.finalText) {
         console.log(parsed.finalText);
-        // intermediate audit: check planning text for unsupported current-state claims
         if (this.config.enableVerifier) {
           await this.auditIntermediateText(situationMemory, parsed.finalText, step, signal);
         }
       }
-      console.log(formatToolBatch(step, parsed.functionCalls.map((call) => call.name)));
+      console.log(formatToolBatch(step, parsed.functionCalls.map((c) => c.name)));
 
       // blind-retry guard
       const blocked = this.findBlockedCall(parsed.functionCalls, situationMemory);
@@ -191,33 +192,25 @@ export class AgentLoop {
         console.log(`[guard] Blocking blind retry of ${blocked.name} (failed ${record.attempts}x).`);
         pendingInput = this.buildCorrectionInput(
           task,
-          `BLIND RETRY BLOCKED:\nTool: ${record.tool}\nError: ${record.error}\nAttempts: ${record.attempts}\nConstraint: Do not retry the exact same action unchanged. Choose a different approach.`,
+          `BLIND RETRY BLOCKED:\nTool: ${record.tool}\nError: ${record.error}\nAttempts: ${record.attempts}\nConstraint: Do not retry unchanged. Choose a different approach.`,
           useStateless ? situationMemory : undefined
         );
         step += 1;
         continue;
       }
 
-      await this.executeToolBatch(
-        parsed.functionCalls,
-        step,
-        usedToolNames,
-        toolActionSummaries,
-        hasModifiedFiles,
-        situationMemory,
-        signal
+      const outputs = await this.executeToolBatch(
+        parsed.functionCalls, step, usedToolNames, toolActionSummaries, hasModifiedFiles, situationMemory, signal
       );
 
-      // in stateless/hybrid: rebuild from situation memory — do NOT pass raw
-      // function_call_output protocol items into a fresh call without previous_response_id
-      if (useStateless || isStateless || isHybrid) {
+      if (useStateless) {
+        // stateless or hybrid-after-reset: rebuild from situation memory
+        // do NOT pass stale function_call_output protocol items without previous_response_id
         pendingInput = this.buildStatelessPrompt(task, situationMemory);
       } else {
-        pendingInput = [];
+        // stateful: send function_call_output items back to Responses API
+        pendingInput = outputs;
       }
-
-      // if verifier is enabled, check for pending verifications in the snapshot
-      // (pending verifications are already embedded in the situation snapshot for the executor to see)
 
       step += 1;
     }
@@ -245,57 +238,71 @@ export class AgentLoop {
   ): Promise<void> {
     const verifierModel = this.config.verifierModel || this.config.model;
     const result = await auditIntermediateClaims(this.client, verifierModel, memory.getEvidence(), planningText, signal);
-    if (!result.ok) return; // lenient on intermediate audit failure — don't block tool execution
+    if (!result.ok) {
+      // Record failure — do not silently drop. Final verifier will be stricter.
+      memory.recordAuditFailure();
+      console.log(`[intermediate audit] Audit failed: ${result.reason}. Recorded for stricter final verification.`);
+      return;
+    }
     for (const assumption of result.unsupported_assumptions) {
       memory.addPendingVerification(assumption.claim, assumption.required_verification, step);
-      console.log(`[intermediate audit] Unsupported claim queued for verification: ${assumption.claim.slice(0, 100)}`);
+      console.log(`[intermediate audit] Unsupported claim queued: ${assumption.claim.slice(0, 100)}`);
     }
   }
 
+  /** Runs the verifier. Never returns pass:true if reprompt budget is exhausted — always fail closed. */
   private async runVerifierLoop(
     task: string,
     memory: SituationMemory,
     executorClaim: string,
     reprompts: number,
     crashCount: number,
-    useStateless: boolean,
     step: number,
     signal?: AbortSignal
-  ): Promise<{ pass: boolean; correction?: string; crashed?: boolean; reason?: string }> {
-    if (reprompts >= 2) return { pass: true }; // max verifier rounds reached, accept
+  ): Promise<{ pass: true } | { pass: false; correction: string; crashed?: boolean; stop?: false } | { pass: false; stop: true; stopMessage: string }> {
+    // budget exhausted — fail closed, never accept unverified answer
+    if (reprompts >= this.config.maxVerifierReprompts) {
+      return {
+        pass: false,
+        stop: true,
+        stopMessage: `[agent stopped: max verifier reprompts (${this.config.maxVerifierReprompts}) reached without satisfying verification requirements. Refusing to accept unverified final answer.]`
+      };
+    }
 
     const verifierModel = this.config.verifierModel || this.config.model;
     const result = await runVerifier(
-      this.client,
-      verifierModel,
-      task,
-      memory.getEvidence(),
-      memory.getUnresolvedVerifications(),
-      executorClaim,
-      signal
+      this.client, verifierModel, task,
+      memory.getEvidence(), memory.getUnresolvedVerifications(),
+      executorClaim, memory.hasAuditFailures(), signal
     );
 
     if (!result.ok) {
       console.log(`[verifier] ${result.reason}`);
-      return { pass: false, crashed: true, reason: result.reason };
+      if (crashCount + 1 >= 2) {
+        return {
+          pass: false,
+          stop: true,
+          stopMessage: `[agent stopped: verifier failed ${crashCount + 1} times. Refusing unverified answer. Last error: ${result.reason}]`
+        };
+      }
+      return { pass: false, crashed: true, correction: `[verifier unavailable] ${result.reason}\nPlease provide additional tool evidence before submitting a final answer.` };
     }
 
     const vr = result.result;
     console.log(`[verifier] verdict=${vr.verdict} confidence=${vr.confidence}`);
 
-    if (vr.verdict === "pass") {
-      if (vr.resolved_claims?.length) memory.resolvePendingVerifications(vr.resolved_claims);
+    if (vr.resolved_claims?.length) memory.resolvePendingVerifications(vr.resolved_claims);
+
+    if (vr.verdict === "pass" && memory.getUnresolvedVerifications().length === 0) {
       return { pass: true };
     }
 
-    // add unsupported assumptions to pending verification queue
+    // add new unsupported assumptions to pending queue
     for (const assumption of vr.unsupported_assumptions) {
       memory.addPendingVerification(assumption.claim, assumption.required_verification, step);
     }
-    if (vr.resolved_claims?.length) memory.resolvePendingVerifications(vr.resolved_claims);
 
-    const correction = buildVerifierCorrection(vr);
-    return { pass: false, correction };
+    return { pass: false, correction: buildVerifierCorrection(vr) };
   }
 
   private buildInput(task: string, memory?: SituationMemory): string {
@@ -346,23 +353,25 @@ export class AgentLoop {
     hasModifiedFiles: { value: boolean },
     situationMemory: SituationMemory,
     signal?: AbortSignal
-  ): Promise<void> {
+  ): Promise<FunctionCallOutput[]> {
+    const outputs: FunctionCallOutput[] = [];
     for (let index = 0; index < functionCalls.length;) {
       const call = functionCalls[index];
       if (this.tools.isReadOnly(call.name)) {
-        const readOnlyCalls: typeof functionCalls = [];
+        const batch: typeof functionCalls = [];
         while (index < functionCalls.length && this.tools.isReadOnly(functionCalls[index].name)) {
-          readOnlyCalls.push(functionCalls[index]);
-          index += 1;
+          batch.push(functionCalls[index++]);
         }
-        await Promise.all(readOnlyCalls.map((item) =>
+        const results = await Promise.all(batch.map((item) =>
           this.executeOneToolCall(item, step, usedToolNames, toolActionSummaries, hasModifiedFiles, situationMemory, signal)
         ));
+        outputs.push(...results);
         continue;
       }
-      await this.executeOneToolCall(call, step, usedToolNames, toolActionSummaries, hasModifiedFiles, situationMemory, signal);
+      outputs.push(await this.executeOneToolCall(call, step, usedToolNames, toolActionSummaries, hasModifiedFiles, situationMemory, signal));
       index += 1;
     }
+    return outputs;
   }
 
   private async executeOneToolCall(
@@ -373,7 +382,7 @@ export class AgentLoop {
     hasModifiedFiles: { value: boolean },
     situationMemory: SituationMemory,
     signal?: AbortSignal
-  ): Promise<void> {
+  ): Promise<FunctionCallOutput> {
     throwIfAborted(signal);
     usedToolNames.add(call.name);
     let args: unknown;
@@ -383,14 +392,14 @@ export class AgentLoop {
       const msg = error instanceof Error ? error.message : String(error);
       situationMemory.recordFailure(call.name, {}, `JSON parse error: ${msg}`, step);
       toolActionSummaries.push({ step, name: call.name, ok: false, summary: `JSON parse error: ${msg}` });
-      return;
+      return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify({ ok: false, error: { code: "json_parse_error", message: msg } }) };
     }
 
     const result = await this.tools.execute(call.name, args, this.toolCtx);
     throwIfAborted(signal);
     if (call.name === "apply_patch" && result.ok) hasModifiedFiles.value = true;
 
-    // rawOutput is the actual tool result — NOT a model-generated summary
+    // rawOutput is the literal tool result — NOT a model-generated summary
     const rawOutput = result.ok
       ? JSON.stringify(result.data).slice(0, 800)
       : `ERROR: ${result.error.message}`;
@@ -409,18 +418,19 @@ export class AgentLoop {
       priority: 45,
       expiresAfterSteps: 2
     });
+    return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
   }
 }
 
 function buildPendingVerificationBlock(unresolved: Array<{ claim: string; requiredAction: string }>): string {
   const lines = [
-    "FINALIZATION BLOCKED: The following claims were identified as unsupported and must be verified with tool calls before a final answer can be accepted:"
+    "FINALIZATION BLOCKED: These claims are unsupported and must be verified with tool evidence:"
   ];
   for (const pv of unresolved) {
     lines.push(`  Claim: ${pv.claim}`);
     lines.push(`  Required action: ${pv.requiredAction}`);
   }
-  lines.push("\nCompliance language ('I verified', 'I checked') is NOT evidence. Perform the required tool calls.");
+  lines.push("\nCompliance language ('I verified', 'I checked') is NOT evidence. Use the required tools.");
   return lines.join("\n");
 }
 
@@ -430,11 +440,11 @@ function buildVerifierCorrection(vr: VerifierResult): string {
     `Reason: ${vr.reason}`
   ];
   if (vr.unsupported_assumptions.length > 0) {
-    lines.push("\nUnsupported assumptions — you must verify these with tool calls:");
+    lines.push("\nUnsupported assumptions — verify with tool calls:");
     for (const a of vr.unsupported_assumptions) {
       lines.push(`  Claim: ${a.claim}`);
       lines.push(`  Why unsupported: ${a.why_unsupported}`);
-      lines.push(`  Required verification: ${a.required_verification}`);
+      lines.push(`  Required: ${a.required_verification}`);
     }
   }
   if (vr.missing_evidence.length > 0) {
@@ -445,7 +455,7 @@ function buildVerifierCorrection(vr: VerifierResult): string {
     lines.push("\nRequired next actions:");
     for (const a of vr.required_next_actions) lines.push(`  - ${a}`);
   }
-  lines.push("\nCompliance language ('I verified', 'I checked') is NOT evidence. Perform the required tool calls.");
+  lines.push("\nCompliance language is NOT evidence. Perform the required tool calls.");
   return lines.join("\n");
 }
 
@@ -454,9 +464,7 @@ function formatToolBatch(step: number, toolNames: string[]): string {
 }
 
 function formatActionSummary(actions: ToolActionSummary[]): string {
-  return actions
-    .map((a) => `- step ${a.step}: ${a.name} ${a.ok ? "ok" : "failed"} - ${a.summary}`)
-    .join("\n");
+  return actions.map((a) => `- step ${a.step}: ${a.name} ${a.ok ? "ok" : "failed"} - ${a.summary}`).join("\n");
 }
 
 export function shouldContinueAfterPlanOnlyResponse(text: string, task: string, actionCount: number): boolean {
@@ -464,7 +472,7 @@ export function shouldContinueAfterPlanOnlyResponse(text: string, task: string, 
   const taskLower = task.toLowerCase();
   const saysItWillUseTools = /(brief plan|before first tool call|i'?ll now|i will now|proceeding to|run the first tool|call .*tool|use .*tool|工具)/i.test(text);
   const englishActionTask = /\b(commit|push|edit|modify|fix|write|create|delete|run|test|build|review|issue|pr)\b/i.test(taskLower);
-  const localizedActionTask = ["修 bug", "修改", "修正", "建立", "新增", "刪除", "執行", "执行", "測試", "测试", "建置", "提交", "推送", "審核", "審核", "開pr", "開 issue"].some((k) => taskLower.includes(k));
+  const localizedActionTask = ["修 bug", "修改", "修正", "建立", "新增", "刪除", "執行", "执行", "測試", "测试", "建置", "提交", "推送", "審核", "開pr", "開 issue"].some((k) => taskLower.includes(k));
   const claimsNoCapability = /no .*tool available|there is no .*tool|tools limited to/i.test(text.toLowerCase());
   return actionCount === 0 && (englishActionTask || localizedActionTask) && (saysItWillUseTools || claimsNoCapability);
 }

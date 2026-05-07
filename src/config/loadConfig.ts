@@ -23,6 +23,7 @@ export type GrokCodeConfig = {
   hybridResetAfterFailures: number;
   enableVerifier: boolean;
   verifierModel: string;
+  maxVerifierReprompts: number;
 };
 
 export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfig> = {}): GrokCodeConfig {
@@ -45,6 +46,7 @@ export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfi
     hybridResetAfterFailures: 3,
     enableVerifier: false,
     verifierModel: "grok-4.3",
+    maxVerifierReprompts: 2,
     ...projectConfig,
     ...cleanOverrides
   };

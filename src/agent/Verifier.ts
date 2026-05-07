@@ -60,6 +60,7 @@ export async function runVerifier(
   evidence: ToolEvidence[],
   pendingVerifications: PendingVerification[],
   executorClaim: string,
+  intermediateAuditFailed: boolean,
   signal?: AbortSignal
 ): Promise<VerifierRunResult> {
   const evidenceText = evidence.length > 0
@@ -89,7 +90,7 @@ RUNTIME EVIDENCE (raw tool results — these are the only facts):
 ${evidenceText}
 ${pendingText}
 
-EXECUTOR FINAL CLAIM (treat as unverified — audit against the evidence above):
+${intermediateAuditFailed ? "NOTE: One or more intermediate claim audits failed during this run. Apply extra scrutiny to all claims.\n" : ""}EXECUTOR FINAL CLAIM (treat as unverified — audit against the evidence above):
 ${executorClaim}`;
 
   let lastError = "";
