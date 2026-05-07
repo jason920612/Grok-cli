@@ -10,6 +10,7 @@ export type ModelInputBuildOptions = {
   generalSkills: Skill[];
   toolSkills: ToolSkill[];
   projectInstructions: string;
+  situationSnapshot?: string;
 };
 
 export function buildModelInput(options: ModelInputBuildOptions): string {
@@ -44,7 +45,11 @@ ${options.projectInstructions || "None."}
 <Relevant Context>
 ${relevant || "No additional context yet."}
 </Relevant Context>
-
+${options.situationSnapshot ? `
+<Situation Memory>
+${options.situationSnapshot}
+</Situation Memory>
+` : ""}
 <User Task>
 ${options.task}
 </User Task>`;
