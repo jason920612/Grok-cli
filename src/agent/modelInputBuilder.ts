@@ -22,6 +22,7 @@ export type StatelessInputBuildOptions = {
     attempts: number;
   };
   verifierFeedback?: string;
+  runtimeFeedback?: string;
   toolIndex: string;
   generalSkills: Skill[];
   toolSkills: ToolSkill[];
@@ -47,6 +48,12 @@ Constraint: Do not retry this exact call unchanged. Narrow the scope, inspect th
     ? `\n<Verifier Feedback>
 ${options.verifierFeedback}
 </Verifier Feedback>`
+    : "";
+
+  const runtimeFeedbackSection = options.runtimeFeedback
+    ? `\n<Runtime Feedback>
+${options.runtimeFeedback}
+</Runtime Feedback>`
     : "";
 
   return `<System>
@@ -78,7 +85,7 @@ ${options.task}
 <Verified Workspace Observations>
 ${observations}
 </Verified Workspace Observations>
-${failureSection}${verifierSection}`;
+${failureSection}${verifierSection}${runtimeFeedbackSection}`;
 }
 
 export function buildModelInput(options: ModelInputBuildOptions): string {

@@ -26,22 +26,37 @@ type FailureRecord = {
   lastError: string;
   lastArgs: string;
   toolName: string;
+  progressVersion: number;
 };
 
 class FailureTracker {
   private map = new Map<string, FailureRecord>();
   private lastKey: string | undefined;
+  private progressVersion = 0;
 
   record(toolName: string, args: string, error: string): void {
     const key = normalizeFailureKey(toolName, args);
-    const prev = this.map.get(key) ?? { count: 0, lastError: "", lastArgs: args, toolName };
-    this.map.set(key, { count: prev.count + 1, lastError: error, lastArgs: args, toolName });
+    const prev = this.map.get(key) ?? {
+      count: 0,
+      lastError: "",
+      lastArgs: args,
+      toolName,
+      progressVersion: this.progressVersion
+    };
+    this.map.set(key, {
+      count: prev.count + 1,
+      lastError: error,
+      lastArgs: args,
+      toolName,
+      progressVersion: this.progressVersion
+    });
     this.lastKey = key;
   }
 
   isRepeated(toolName: string, args: string): boolean {
     const key = normalizeFailureKey(toolName, args);
-    return (this.map.get(key)?.count ?? 0) >= 1;
+    const rec = this.map.get(key);
+    return Boolean(rec && rec.count >= 1 && rec.progressVersion === this.progressVersion);
   }
 
   lastFailure(): { toolName: string; args: string; error: string; attempts: number } | undefined {
@@ -50,12 +65,20 @@ class FailureTracker {
     if (!rec) return undefined;
     return { toolName: rec.toolName, args: rec.lastArgs, error: rec.lastError, attempts: rec.count };
   }
+
+  markProgress(): void {
+    this.progressVersion++;
+  }
 }
 
 function getShellExitCode(toolName: string, data: unknown): number | undefined {
   if (toolName !== "run_shell" && toolName !== "start_background_command") return undefined;
   const d = data as Record<string, unknown> | undefined;
   return typeof d?.exitCode === "number" ? d.exitCode : undefined;
+}
+
+function isShellTool(toolName: string): boolean {
+  return toolName === "run_shell" || toolName === "start_background_command";
 }
 
 function normalizeFailureKey(toolName: string, args: string): string {
@@ -91,6 +114,7 @@ export class AgentLoop {
     let verifierAttempts = 0;
     let lastVerifierFeedback: string | undefined;
     let lastVerifierVerdict: import("./EvidenceBundle.js").VerifierVerdict | undefined;
+    let runtimeFeedback: string | undefined;
     const hasModifiedFiles = { value: false };
     const failureTracker = new FailureTracker();
     let chainLength = 0;
@@ -138,6 +162,7 @@ export class AgentLoop {
           ),
           lastFailure: failureTracker.lastFailure(),
           verifierFeedback: lastVerifierFeedback,
+          runtimeFeedback,
           toolIndex: this.toolSkills.toolIndex(),
           generalSkills: this.skillLoader.select(task),
           toolSkills: this.toolSkills.select(task, [...usedToolNames]),
@@ -177,8 +202,9 @@ export class AgentLoop {
         if (emptyReprompts < 1) {
           emptyReprompts++;
           console.log("[Warning] Empty response from model. Requesting continuation.");
-          pendingInput =
+          runtimeFeedback =
             "Your previous response was empty. Continue by emitting exactly one tool call or a final answer. Do not respond with only narration.";
+          pendingInput = runtimeFeedback;
           step++;
           continue;
         }
@@ -198,8 +224,9 @@ export class AgentLoop {
           console.log(
             "Grok provided a plan without tool calls; asking it to continue with the required tools."
           );
-          pendingInput =
-            "You provided a plan but did not request any function_call tools. The user asked for an action, not only a plan. Continue now by requesting the appropriate tools in this response. If the action cannot be completed, explain the concrete blocker after using any relevant inspection tools.";
+          runtimeFeedback =
+            "You provided a plan but did not request any function_call tools. The user asked for an action, not only a plan. Continue now by requesting exactly one appropriate tool in this response. If the action cannot be completed, explain the concrete blocker after using any relevant inspection tools.";
+          pendingInput = runtimeFeedback;
           step++;
           continue;
         }
@@ -227,6 +254,7 @@ export class AgentLoop {
               const feedback = buildVerifierFeedback(verdict);
               console.log(`[Verifier] ${verdict.verdict} (confidence: ${verdict.confidence}): ${verdict.reason}`);
               lastVerifierFeedback = feedback;
+              runtimeFeedback = undefined;
               this.context.upsert("verifier-feedback", {
                 type: "verifier_feedback",
                 content: feedback,
@@ -248,6 +276,15 @@ export class AgentLoop {
 
         finalText = parsed.finalText;
         break;
+      }
+
+      if (parsed.functionCalls.length > 1) {
+        runtimeFeedback =
+          `Invalid response: requested ${parsed.functionCalls.length} tool calls in one turn. ` +
+          "Continue by requesting exactly one tool call, or provide a final answer if the task is complete.";
+        pendingInput = runtimeFeedback;
+        step++;
+        continue;
       }
 
       if (parsed.finalText) console.log(parsed.finalText);
@@ -273,6 +310,7 @@ export class AgentLoop {
       } else {
         pendingInput = outputs;
       }
+      runtimeFeedback = undefined;
 
       step++;
     }
@@ -398,6 +436,8 @@ export class AgentLoop {
         ? result.error.message
         : `Command exited with code ${shellExitCode}: ${String((result.data as any)?.stdout ?? "").slice(0, 200)}`;
       failureTracker.record(call.name, call.arguments ?? "{}", errorMsg);
+    } else if (!this.tools.isReadOnly(call.name) && !isShellTool(call.name)) {
+      failureTracker.markProgress();
     }
 
     toolActionSummaries.push({
