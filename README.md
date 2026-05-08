@@ -61,9 +61,11 @@ Global flags:
 --profile <default|build|test|debug|package|docs>
 --tool-choice <auto|required|none>
 --max-steps <number>
+--conversation-mode <stateless|stateful|hybrid>
 --no-server-tools
 --no-web-search
 --no-x-search
+--verifier
 ```
 
 ## Interactive Mode
@@ -96,6 +98,36 @@ Useful slash commands:
 /exit
 ```
 
+## Conversation Modes
+
+Grok Code supports three agent loop modes, configurable via `--conversation-mode`. The default is `stateless`.
+
+### `stateless` (default)
+
+Every model request is a fresh single-turn call with no `previous_response_id`. The CLI maintains external situation memory and injects a structured snapshot into each prompt:
+
+- Current task
+- Verified workspace observations from prior tool calls
+- Last failure context with retry constraint
+- Verifier feedback (when verifier is enabled)
+
+Recommended for multi-step agent loops. Prevents long-chain degradation where the model loses track of prior context.
+
+### `stateful`
+
+Uses `previous_response_id` to chain requests into a conversation. Each call continues from where the last one left off.
+
+Best for short, chat-style interactions.
+
+### `hybrid`
+
+Uses stateful chaining for short bursts, then resets to a fresh stateless call when thresholds are exceeded:
+
+- More than 10 turns in a chain (`hybridResetAfterTurns`)
+- 3 consecutive failures (`hybridResetAfterFailures`)
+
+Both thresholds are configurable in `.grok-code/config.json`.
+
 ## Function Calling Architecture
 
 The agent uses `client.responses.create(...)` from the `openai` npm package with:
@@ -105,7 +137,7 @@ The agent uses `client.responses.create(...)` from the `openai` npm package with
 - `tools`
 - `tool_choice`
 - `parallel_tool_calls: true`
-- `previous_response_id`
+- `previous_response_id` (stateful and hybrid modes only)
 
 The model receives local custom tool schemas. When it needs workspace data or local actions, it returns `function_call` items. `grok-code` executes all local calls from the same response, then sends:
 
@@ -117,11 +149,11 @@ The model receives local custom tool schemas. When it needs workspace data or lo
 }
 ```
 
-The next Responses API call includes `previous_response_id: response.id`.
+In stateful mode, the next Responses API call includes `previous_response_id: response.id`. In stateless mode, the prior conversation is replaced by a compact situation-memory snapshot instead.
 
 Streaming support is reserved in the architecture. Function calls are treated as complete chunks; the implementation does not assume arguments stream token by token.
 
-During multi-step work, Grok Code asks the model to state a brief plan before tool use. The CLI also prints each requested tool batch and appends an `Actions completed` summary to final output so the user can audit what happened.
+The CLI prints each requested tool batch and appends an `Actions completed` summary to final output so the user can audit what happened.
 
 ## Server-side Tools vs Local Tools
 

@@ -39,7 +39,7 @@ export async function main(): Promise<void> {
     .option("--no-server-tools", "Disable xAI server-side tools")
     .option("--no-web-search", "Disable xAI web_search server-side tool")
     .option("--no-x-search", "Disable xAI x_search server-side tool")
-    .option("--conversation-mode <mode>", "stateful|stateless|hybrid", "stateful")
+    .option("--conversation-mode <mode>", "stateful|stateless|hybrid", "stateless")
     .option("--verifier", "Enable independent verifier agent after each final answer");
 
   program.command("ask <question...>").description("Ask a question").action(async (question: string[]) => runOne(question.join(" "), program.opts<CliOpts>(), "ask"));

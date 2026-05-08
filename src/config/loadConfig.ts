@@ -40,7 +40,7 @@ export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfi
     workspaceRoot: cwd,
     sandboxProfile: "default",
     workspaceTrusted: false,
-    conversationMode: "stateful",
+    conversationMode: "stateless",
     hybridResetAfterTurns: 10,
     hybridResetAfterFailures: 3,
     enableVerifier: false,
