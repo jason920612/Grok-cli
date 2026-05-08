@@ -1,7 +1,7 @@
 import type OpenAI from "openai";
 import type { GrokCodeConfig } from "../config/loadConfig.js";
 import { parseResponse } from "../api/responseParser.js";
-import type { EvidenceBundle, VerifierVerdict, UnsupportedAssumption } from "./EvidenceBundle.js";
+import type { EvidenceBundle, EvidenceItem, VerifierVerdict, UnsupportedAssumption, IntermediateAuditResult } from "./EvidenceBundle.js";
 
 const VERIFIER_PROMPT = `You are an independent verifier for a coding agent. You did not participate in the previous work.
 
@@ -38,11 +38,77 @@ Use "pass" only when all material claims in the executor's final answer are trac
 Use "needs_more_evidence" when key claims are unverified but the task might still be completable.
 Use "fail" when the evidence actively contradicts the executor's claim or critical steps were skipped.`;
 
+const INTERMEDIATE_AUDIT_PROMPT = `You are an intermediate assumption auditor for a coding agent turn.
+
+Your only job is to check whether the executor's reasoning text for THIS turn makes unsupported claims about current workspace state.
+
+Rules:
+- Flag claims about current workspace state (file contents, test results, environment, config, dependencies) that are NOT backed by any tool result in the provided evidence list.
+- Do not flag hypotheses explicitly marked as uncertain ("possibly", "might", "I think").
+- Do not flag intent statements ("I will check...") — those are handled by a separate guard.
+- Do not flag general programming knowledge or reasoning that does not assert a specific current-state fact.
+- A claim is unsupported if the executor states a fact about current state without a corresponding tool call result confirming it.
+- Evidence from earlier turns (already in the accumulated list) may support a claim.
+
+Return ONLY a JSON object — no other text, no markdown fences:
+{
+  "hasUnsupportedAssumptions": true | false,
+  "unsupportedAssumptions": [
+    {
+      "claim": "specific assumption the executor stated as fact",
+      "whyUnsupported": "no tool call in evidence confirms this current-state fact",
+      "requiredVerification": "which tool call would confirm it"
+    }
+  ],
+  "requiredNextActions": ["specific tool call needed before proceeding"]
+}
+
+If there are no unsupported assumptions, return hasUnsupportedAssumptions: false with empty arrays.`;
+
 export class VerifierAgent {
   constructor(
     private readonly client: OpenAI,
     private readonly config: GrokCodeConfig
   ) {}
+
+  async auditIntermediateTurn(
+    task: string,
+    executorText: string,
+    evidenceItems: EvidenceItem[]
+  ): Promise<IntermediateAuditResult> {
+    const evidenceText = evidenceItems.length > 0
+      ? evidenceItems
+          .map((item, i) => `${i + 1}. [${item.ok ? "ok" : "failed"}] ${item.toolName}(${item.args ?? ""}) => ${item.summary}`)
+          .join("\n")
+      : "No tool calls recorded yet.";
+
+    const input = `${INTERMEDIATE_AUDIT_PROMPT}
+
+<task>
+${task}
+</task>
+
+<accumulated_evidence>
+${evidenceText}
+</accumulated_evidence>
+
+<executor_reasoning_this_turn>
+${executorText}
+</executor_reasoning_this_turn>`;
+
+    let response: any;
+    try {
+      response = await (this.client as any).responses.create({
+        model: this.config.model,
+        input: [{ role: "user", content: input }],
+        parallel_tool_calls: false
+      });
+    } catch {
+      return { hasUnsupportedAssumptions: false, unsupportedAssumptions: [], requiredNextActions: [] };
+    }
+    const parsed = parseResponse(response);
+    return parseIntermediateAuditResult(parsed.finalText);
+  }
 
   async verify(bundle: EvidenceBundle): Promise<VerifierVerdict> {
     const input = buildVerifierInput(bundle);
@@ -142,6 +208,45 @@ ${traceText}
 <claim>
 ${bundle.executorClaim}
 </claim>`;
+}
+
+export function buildIntermediateAssumptionFeedback(result: IntermediateAuditResult): string {
+  const lines: string[] = [
+    "[Intermediate Audit] Unsupported assumptions detected in your reasoning this turn.",
+    "These claims about current workspace state are not backed by tool evidence:",
+  ];
+  for (const a of result.unsupportedAssumptions) {
+    lines.push(`  - Claim: ${a.claim}`);
+    lines.push(`    Why unsupported: ${a.whyUnsupported}`);
+    lines.push(`    Required verification: ${a.requiredVerification}`);
+  }
+  if (result.requiredNextActions.length > 0) {
+    lines.push("Required next actions before proceeding:");
+    for (const action of result.requiredNextActions) lines.push(`  - ${action}`);
+  }
+  lines.push(
+    "Do not build on unverified assumptions. Call the required tools to gather evidence first.",
+    "Do not self-certify that you avoided assumptions — only tool results count."
+  );
+  return lines.join("\n");
+}
+
+function parseIntermediateAuditResult(text: string): IntermediateAuditResult {
+  const trimmed = text.trim();
+  const jsonStart = trimmed.indexOf("{");
+  const jsonEnd = trimmed.lastIndexOf("}");
+  if (jsonStart === -1 || jsonEnd === -1) return { hasUnsupportedAssumptions: false, unsupportedAssumptions: [], requiredNextActions: [] };
+  try {
+    const raw = JSON.parse(trimmed.slice(jsonStart, jsonEnd + 1)) as Record<string, unknown>;
+    const assumptions = parseAssumptions(raw.unsupportedAssumptions);
+    return {
+      hasUnsupportedAssumptions: Boolean(raw.hasUnsupportedAssumptions) && assumptions.length > 0,
+      unsupportedAssumptions: assumptions,
+      requiredNextActions: parseStringArray(raw.requiredNextActions)
+    };
+  } catch {
+    return { hasUnsupportedAssumptions: false, unsupportedAssumptions: [], requiredNextActions: [] };
+  }
 }
 
 function parseVerifierVerdict(text: string): VerifierVerdict {

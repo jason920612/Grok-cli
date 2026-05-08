@@ -42,3 +42,9 @@ export type EvidenceBundle = {
   evidenceItems: EvidenceItem[];
   memoryFacts: EvidenceMemoryFact[];
 };
+
+export type IntermediateAuditResult = {
+  hasUnsupportedAssumptions: boolean;
+  unsupportedAssumptions: UnsupportedAssumption[];
+  requiredNextActions: string[];
+};

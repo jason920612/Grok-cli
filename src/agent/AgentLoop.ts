@@ -10,7 +10,7 @@ import type { SkillLoader } from "../skills/SkillLoader.js";
 import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import { buildModelInput, buildStatelessInput } from "./modelInputBuilder.js";
 import { finalAnswerGate } from "./finalAnswerGate.js";
-import { VerifierAgent, buildVerifierFeedback } from "./VerifierAgent.js";
+import { VerifierAgent, buildVerifierFeedback, buildIntermediateAssumptionFeedback } from "./VerifierAgent.js";
 import type { EvidenceBundle, EvidenceMemoryFact } from "./EvidenceBundle.js";
 import type { ContextItem } from "../context/ContextItem.js";
 
@@ -310,6 +310,28 @@ export class AgentLoop {
       // Track consecutive failures
       const stepHadFailure = toolActionSummaries.filter((s) => s.step === step).some((s) => !s.ok);
       consecutiveFailures = stepHadFailure ? consecutiveFailures + 1 : 0;
+
+      // Intermediate assumption audit: check executor's visible reasoning for unsupported
+      // workspace-state claims before they propagate into the next turn's situation memory.
+      if (this.config.enableIntermediateVerifier && parsed.finalText) {
+        const intermediateVerifier = new VerifierAgent(this.client, this.config);
+        const auditResult = await intermediateVerifier.auditIntermediateTurn(
+          task,
+          parsed.finalText,
+          toolActionSummaries.map((s) => ({ toolName: s.name, ok: s.ok, args: s.args, summary: s.summary }))
+        );
+        if (auditResult.hasUnsupportedAssumptions) {
+          const feedback = buildIntermediateAssumptionFeedback(auditResult);
+          console.log(`[Intermediate Audit] Unsupported assumptions detected (${auditResult.unsupportedAssumptions.length})`);
+          this.context.upsert("intermediate-assumption-warning", {
+            type: "intermediate_assumption_warning",
+            content: feedback,
+            priority: 90,
+            pinned: false,
+            expiresAfterSteps: 2
+          });
+        }
+      }
 
       if (mode === "stateless") {
         // Situation is rebuilt from toolActionSummaries next turn; pendingInput unused
