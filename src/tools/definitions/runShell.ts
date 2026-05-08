@@ -25,13 +25,29 @@ export function runShellTool(skills: ToolSkillRegistry) {
         const { stdout, stderr } = await execAsync(args.command, { cwd: ctx.workspaceRoot, timeout, maxBuffer: 5_000_000, windowsHide: true });
         await markNewGeneratedDirs(ctx, existingGeneratedDirs);
         const output = summarizeOutput(`${stdout}${stderr ? `\n${stderr}` : ""}`);
-        ctx.context.add({ type: "shell_output", content: `$ ${args.command}\n${output.text}`, priority: /test|build|lint|typecheck/i.test(args.command) ? 75 : 50, expiresAfterSteps: 2, source: { command: args.command } });
+        ctx.context.add({
+          type: "shell_output",
+          content: `$ ${args.command}\n${output.text}`,
+          priority: /test|build|lint|typecheck/i.test(args.command) ? 75 : 50,
+          expiresAfterSteps: 2,
+          factSource: /test|build|lint|typecheck/i.test(args.command) ? "test" : "tool_output",
+          factConfidence: "verified",
+          source: { command: args.command }
+        });
         return { command: args.command, exitCode: 0, stdout: output.text, truncated: output.truncated };
       } catch (error: any) {
         await markNewGeneratedDirs(ctx, existingGeneratedDirs);
         const combined = `${error?.stdout ?? ""}${error?.stderr ? `\n${error.stderr}` : ""}${error?.message ? `\n${error.message}` : ""}`;
         const output = summarizeOutput(combined);
-        ctx.context.add({ type: /test|build|lint|typecheck/i.test(args.command) ? "test_result" : "shell_output", content: `$ ${args.command}\n${output.text}`, priority: 80, expiresAfterSteps: 2, source: { command: args.command } });
+        ctx.context.add({
+          type: /test|build|lint|typecheck/i.test(args.command) ? "test_result" : "shell_output",
+          content: `$ ${args.command}\n${output.text}`,
+          priority: 80,
+          expiresAfterSteps: 2,
+          factSource: /test|build|lint|typecheck/i.test(args.command) ? "test" : "tool_output",
+          factConfidence: "verified",
+          source: { command: args.command }
+        });
         return { command: args.command, exitCode: error?.code ?? 1, stdout: output.text, truncated: output.truncated };
       }
     }

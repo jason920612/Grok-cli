@@ -24,6 +24,7 @@ export type ContextItem = {
     | "test_result"
     | "action_record"
     | "failure_record"
+    | "verifier_feedback"
     | "final";
   content: string;
   tokensEstimate: number;

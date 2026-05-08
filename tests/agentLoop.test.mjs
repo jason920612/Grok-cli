@@ -23,15 +23,18 @@ function responseWithText(id, text) {
   return { id, output_text: text };
 }
 
-function makeLoop({ responses, config = {}, execute, isReadOnly } = {}) {
+function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = [] } = {}) {
   const payloads = [];
   const toolCalls = [];
+  const storedContextItems = [...contextItems];
   let index = 0;
   const client = {
     responses: {
       create: async (payload) => {
         payloads.push(payload);
-        return responses[index++] ?? responseWithText(`r${index}`, "done");
+        const next = responses[index++];
+        if (typeof next === "function") return next(payload);
+        return next ?? responseWithText(`r${index}`, "done");
       }
     }
   };
@@ -47,15 +50,20 @@ function makeLoop({ responses, config = {}, execute, isReadOnly } = {}) {
       conversationMode: "stateful",
       hybridResetAfterTurns: 10,
       hybridResetAfterFailures: 3,
+      enableVerifier: false,
+      verifierMaxRetries: 2,
       ...config
     },
     {
       upsert() {},
       nextStep() {},
       relevant() {
-        return [];
+        return storedContextItems;
       },
-      add() {}
+      add(item) {
+        storedContextItems.push(item);
+        return item;
+      }
     },
     {
       schemas() {
@@ -152,4 +160,155 @@ test("multiple tool calls are rejected and corrected before execution", async ()
   assert.equal(toolCalls.length, 0);
   assert.match(String(payloads[1].input), /Invalid response: requested 2 tool calls/);
   assert.match(String(payloads[1].input), /exactly one tool call/);
+});
+
+test("verifier audits zero-tool final answers and reports retry exhaustion", async () => {
+  const { loop, payloads } = makeLoop({
+    config: { enableVerifier: true, verifierMaxRetries: 1 },
+    responses: [
+      responseWithText("r1", "src/agent/Agent.ts exports Agent"),
+      (payload) => {
+        assert.equal("tool_choice" in payload, false);
+        return responseWithText(
+          "v1",
+          JSON.stringify({
+            verdict: "needs_more_evidence",
+            reason: "No tool evidence.",
+            unsupportedClaims: ["export claim"],
+            unsupportedAssumptions: [],
+            missingEvidence: ["read src/agent/Agent.ts"],
+            requiredNextActions: ["read_file_range src/agent/Agent.ts"],
+            confidence: "high"
+          })
+        );
+      },
+      responseWithText("r2", "src/agent/Agent.ts exports Agent")
+    ]
+  });
+
+  const output = await loop.run("does src/agent/Agent.ts export Agent?", true);
+
+  const verifierPayload = payloads.find((payload) => payload.parallel_tool_calls === false);
+  const verifierInput = JSON.stringify(verifierPayload?.input);
+  assert.equal("tools" in verifierPayload, false);
+  assert.equal("tool_choice" in verifierPayload, false);
+  assert.match(String(verifierInput), /No tool calls recorded/);
+  assert.match(output, /Retry budget exhausted/);
+  assert.match(output, /read src\/agent\/Agent\.ts/);
+});
+
+test("verifier receives runtime memory facts with provenance", async () => {
+  const { loop, payloads } = makeLoop({
+    config: { enableVerifier: true, verifierMaxRetries: 1 },
+    contextItems: [
+      {
+        type: "file_range",
+        content: "src/agent/Agent.ts:1-3\n1: export class Agent {}",
+        priority: 70,
+        factSource: "tool_output",
+        factConfidence: "verified",
+        source: { path: "src/agent/Agent.ts", startLine: 1, endLine: 3 },
+        tokensEstimate: 10
+      },
+      {
+        type: "task_summary",
+        content: "The executor thinks Agent is exported.",
+        priority: 60,
+        factSource: "model_inference",
+        factConfidence: "inferred",
+        tokensEstimate: 10
+      }
+    ],
+    responses: [
+      responseWithText("r1", "src/agent/Agent.ts exports Agent"),
+      (payload) => {
+        assert.equal("tool_choice" in payload, false);
+        return responseWithText(
+          "v1",
+          JSON.stringify({
+            verdict: "pass",
+            reason: "The file_range evidence supports the claim.",
+            unsupportedClaims: [],
+            unsupportedAssumptions: [],
+            missingEvidence: [],
+            requiredNextActions: [],
+            confidence: "high"
+          })
+        );
+      }
+    ]
+  });
+
+  await loop.run("does src/agent/Agent.ts export Agent?", true);
+
+  const verifierInput = JSON.stringify(payloads.find((payload) => payload.parallel_tool_calls === false)?.input);
+  assert.match(verifierInput, /<runtime_memory_facts>/);
+  assert.match(verifierInput, /confidence=verified/);
+  assert.match(verifierInput, /path=src\/agent\/Agent\.ts/);
+  assert.match(verifierInput, /confidence=inferred/);
+});
+
+test("verifier receives visible executor trace as claims not evidence", async () => {
+  const { loop, payloads } = makeLoop({
+    config: { enableVerifier: true, verifierMaxRetries: 1 },
+    responses: [
+      responseWithTool("r1", functionCall("read_file_range", { path: "src/agent/Agent.ts", startLine: 1, endLine: 20 }, "c1")),
+      responseWithText("r2", "The function already handles null values."),
+      (payload) => {
+        assert.equal("tool_choice" in payload, false);
+        return responseWithText(
+          "v1",
+          JSON.stringify({
+            verdict: "needs_more_evidence",
+            reason: "The trace claim lacks supporting evidence.",
+            unsupportedClaims: ["The function already handles null values."],
+            unsupportedAssumptions: [
+              {
+                claim: "The function already handles null values.",
+                whyUnsupported: "The provided file evidence does not show null handling.",
+                requiredVerification: "Read the relevant function body or tests."
+              }
+            ],
+            missingEvidence: ["Relevant function body or test output"],
+            requiredNextActions: ["read_file_range around the target function"],
+            confidence: "high"
+          })
+        );
+      }
+    ],
+    isReadOnly(name) {
+      return name === "read_file_range";
+    },
+    execute(name, args) {
+      return { ok: true, data: {}, summary: `${name} ${args.path}` };
+    }
+  });
+
+  await loop.run("check null handling", true);
+
+  const verifierInput = JSON.stringify(payloads.find((payload) => payload.parallel_tool_calls === false)?.input);
+  assert.match(verifierInput, /<executor_visible_trace_claims_not_evidence>/);
+  assert.match(verifierInput, /The function already handles null values/);
+});
+
+test("verifier API failures include diagnostic details in feedback", async () => {
+  const apiError = new Error("Connection error.");
+  apiError.status = 503;
+  apiError.code = "service_unavailable";
+  const { loop } = makeLoop({
+    config: { enableVerifier: true, verifierMaxRetries: 1 },
+    responses: [
+      responseWithText("r1", "4"),
+      () => {
+        throw apiError;
+      },
+      responseWithText("r2", "4")
+    ]
+  });
+
+  const output = await loop.run("What is 2+2?", true);
+
+  assert.match(output, /Verifier API call failed: Connection error\./);
+  assert.match(output, /status=503/);
+  assert.match(output, /code=service_unavailable/);
 });
