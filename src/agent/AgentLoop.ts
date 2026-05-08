@@ -114,6 +114,7 @@ export class AgentLoop {
     let planOnlyReprompts = 0;
     let emptyReprompts = 0;
     let verifierAttempts = 0;
+    let intermediateAuditCount = 0;
     let lastVerifierFeedback: string | undefined;
     let lastVerifierVerdict: import("./EvidenceBundle.js").VerifierVerdict | undefined;
     let runtimeFeedback: string | undefined;
@@ -121,6 +122,10 @@ export class AgentLoop {
     const failureTracker = new FailureTracker();
     let chainLength = 0;
     let consecutiveFailures = 0;
+    const verifier =
+      this.config.enableVerifier || this.config.enableIntermediateVerifier
+        ? new VerifierAgent(this.client, this.config)
+        : null;
 
     this.context.upsert("user-task", { type: "user_task", content: task, priority: 100, pinned: true });
 
@@ -250,8 +255,7 @@ export class AgentLoop {
               })),
               memoryFacts: buildVerifierMemoryFacts(this.context.relevant(task, 20_000))
             };
-            const verifier = new VerifierAgent(this.client, this.config);
-            const verdict = await verifier.verify(bundle);
+            const verdict = await verifier!.verify(bundle);
             verifierAttempts++;
             lastVerifierVerdict = verdict;
 
@@ -313,22 +317,29 @@ export class AgentLoop {
 
       // Intermediate assumption audit: check executor's visible reasoning for unsupported
       // workspace-state claims before they propagate into the next turn's situation memory.
-      if (this.config.enableIntermediateVerifier && parsed.finalText) {
-        const intermediateVerifier = new VerifierAgent(this.client, this.config);
-        const auditResult = await intermediateVerifier.auditIntermediateTurn(
+      let intermediateWarning: string | undefined;
+      if (
+        this.config.enableIntermediateVerifier &&
+        parsed.finalText &&
+        verifier &&
+        intermediateAuditCount < this.config.intermediateAuditMaxPerLoop
+      ) {
+        intermediateAuditCount++;
+        const auditResult = await verifier.auditIntermediateTurn(
           task,
           parsed.finalText,
           toolActionSummaries.map((s) => ({ toolName: s.name, ok: s.ok, args: s.args, summary: s.summary }))
         );
         if (auditResult.hasUnsupportedAssumptions) {
-          const feedback = buildIntermediateAssumptionFeedback(auditResult);
+          intermediateWarning = buildIntermediateAssumptionFeedback(auditResult);
           console.log(`[Intermediate Audit] Unsupported assumptions detected (${auditResult.unsupportedAssumptions.length})`);
+          // Always upsert into context so stateless/hybrid situation snapshots include the warning.
           this.context.upsert("intermediate-assumption-warning", {
             type: "intermediate_assumption_warning",
-            content: feedback,
+            content: intermediateWarning,
             priority: 90,
             pinned: false,
-            expiresAfterSteps: 2
+            expiresAfterSteps: 3
           });
         }
       }
@@ -336,6 +347,10 @@ export class AgentLoop {
       if (mode === "stateless") {
         // Situation is rebuilt from toolActionSummaries next turn; pendingInput unused
         pendingInput = null;
+      } else if (intermediateWarning) {
+        // In stateful/hybrid mode, context is not rebuilt each turn, so append the warning
+        // as a user message alongside tool outputs so the model sees it in the next turn.
+        pendingInput = [...outputs, { role: "user", content: intermediateWarning }];
       } else {
         pendingInput = outputs;
       }

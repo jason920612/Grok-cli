@@ -213,7 +213,7 @@ ${bundle.executorClaim}
 export function buildIntermediateAssumptionFeedback(result: IntermediateAuditResult): string {
   const lines: string[] = [
     "[Intermediate Audit] Unsupported assumptions detected in your reasoning this turn.",
-    "These claims about current workspace state are not backed by tool evidence:",
+    "These claims about current workspace state are not backed by tool evidence:"
   ];
   for (const a of result.unsupportedAssumptions) {
     lines.push(`  - Claim: ${a.claim}`);

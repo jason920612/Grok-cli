@@ -23,9 +23,15 @@ function responseWithText(id, text) {
   return { id, output_text: text };
 }
 
+// Simulates Grok outputting reasoning text alongside a tool call in the same turn.
+function responseWithToolAndText(id, call, text) {
+  return { id, output: [call], output_text: text };
+}
+
 function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = [] } = {}) {
   const payloads = [];
   const toolCalls = [];
+  const upsertCalls = [];
   const storedContextItems = [...contextItems];
   let index = 0;
   const client = {
@@ -52,10 +58,12 @@ function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = 
       hybridResetAfterFailures: 3,
       enableVerifier: false,
       verifierMaxRetries: 2,
+      enableIntermediateVerifier: false,
+      intermediateAuditMaxPerLoop: 5,
       ...config
     },
     {
-      upsert() {},
+      upsert(id, item) { upsertCalls.push({ id, ...item }); },
       nextStep() {},
       relevant() {
         return storedContextItems;
@@ -100,7 +108,7 @@ function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = 
     },
     ""
   );
-  return { loop, payloads, toolCalls };
+  return { loop, payloads, toolCalls, upsertCalls };
 }
 
 test("stateless plan-only reprompt is injected into the next stateless prompt", async () => {
@@ -289,6 +297,134 @@ test("verifier receives visible executor trace as claims not evidence", async ()
   const verifierInput = JSON.stringify(payloads.find((payload) => payload.parallel_tool_calls === false)?.input);
   assert.match(verifierInput, /<executor_visible_trace_claims_not_evidence>/);
   assert.match(verifierInput, /The function already handles null values/);
+});
+
+test("intermediate verifier detects assumptions and injects warning into context and stateful pendingInput", async () => {
+  const auditVerdict = JSON.stringify({
+    hasUnsupportedAssumptions: true,
+    unsupportedAssumptions: [
+      {
+        claim: "The config uses UTC timestamps",
+        whyUnsupported: "No file read confirms timezone setting",
+        requiredVerification: "read_file_range config.ts"
+      }
+    ],
+    requiredNextActions: ["read_file_range config.ts"]
+  });
+
+  let auditPayload;
+  // payloads sequence: [executor-step1, audit, executor-step2]
+  const { loop, payloads, upsertCalls } = makeLoop({
+    config: { enableIntermediateVerifier: true, intermediateAuditMaxPerLoop: 5 },
+    responses: [
+      // executor turn 1: reasoning text accompanies tool call (real Grok behavior)
+      responseWithToolAndText("r1", functionCall("read_file_range", { path: "src/formatter.ts" }, "c1"), "The config likely uses UTC timestamps."),
+      // intermediate audit call (parallel_tool_calls: false, no tools field)
+      (payload) => {
+        auditPayload = payload;
+        return responseWithText("a1", auditVerdict);
+      },
+      // executor turn 2: sees warning injected into pendingInput, gives final answer
+      responseWithText("r2", "done")
+    ],
+    isReadOnly(name) { return name === "read_file_range"; },
+    execute(name, args) { return { ok: true, data: {}, summary: `read ${args.path}` }; }
+  });
+
+  const output = await loop.run("fix timestamp formatting", true);
+
+  // Audit call must be a stateless verifier call (no tools, parallel_tool_calls: false)
+  assert.ok(auditPayload, "intermediate audit API call should have been made");
+  assert.equal("tools" in auditPayload, false);
+  assert.equal(auditPayload.parallel_tool_calls, false);
+  assert.match(JSON.stringify(auditPayload.input), /<accumulated_evidence>/);
+  assert.match(JSON.stringify(auditPayload.input), /<executor_reasoning_this_turn>/);
+
+  // Warning must be upserted into context
+  const warning = upsertCalls.find((c) => c.id === "intermediate-assumption-warning");
+  assert.ok(warning, "assumption warning should be upserted into context");
+  assert.equal(warning.type, "intermediate_assumption_warning");
+  assert.match(warning.content, /The config uses UTC timestamps/);
+  assert.equal(warning.expiresAfterSteps, 3);
+
+  // In stateful mode the warning must also appear in the next executor turn's input
+  // payloads[0]=executor-step1, payloads[1]=audit, payloads[2]=executor-step2
+  const step2Payload = payloads[2];
+  assert.match(JSON.stringify(step2Payload.input), /Intermediate Audit/);
+
+  assert.match(output, /done/);
+});
+
+test("intermediate verifier fails open on API error and does not block the loop", async () => {
+  const { loop, upsertCalls } = makeLoop({
+    config: { enableIntermediateVerifier: true, intermediateAuditMaxPerLoop: 5 },
+    responses: [
+      // executor turn 1: reasoning text + tool call
+      responseWithToolAndText("r1", functionCall("read_file_range", { path: "src/foo.ts" }, "c1"), "The function looks fine."),
+      // intermediate audit call throws — should be caught and treated as no assumptions
+      () => { throw new Error("audit API timeout"); },
+      // executor turn 2: continues normally
+      responseWithText("r2", "done")
+    ],
+    isReadOnly(name) { return name === "read_file_range"; },
+    execute() { return { ok: true, data: {}, summary: "ok" }; }
+  });
+
+  const output = await loop.run("check foo", true);
+
+  // No warning injected on API failure
+  assert.equal(upsertCalls.filter((c) => c.id === "intermediate-assumption-warning").length, 0);
+  // Loop completed normally despite audit error
+  assert.match(output, /done/);
+});
+
+test("intermediate verifier is skipped when disabled", async () => {
+  let auditCalled = false;
+  const { loop, upsertCalls } = makeLoop({
+    config: { enableIntermediateVerifier: false },
+    responses: [
+      responseWithTool("r1", functionCall("read_file_range", { path: "src/foo.ts" }, "c1")),
+      (payload) => {
+        // If an audit call is made it would have parallel_tool_calls: false and no tools
+        if (!("tools" in payload) && payload.parallel_tool_calls === false) auditCalled = true;
+        return responseWithText("r2", "done");
+      }
+    ],
+    isReadOnly(name) { return name === "read_file_range"; },
+    execute() { return { ok: true, data: {}, summary: "ok" }; }
+  });
+
+  await loop.run("check foo", true);
+
+  assert.equal(auditCalled, false, "audit should not be called when disabled");
+  assert.equal(upsertCalls.filter((c) => c.id === "intermediate-assumption-warning").length, 0);
+});
+
+test("intermediate verifier respects max audit cap per loop", async () => {
+  let auditCallCount = 0;
+  const noAssumptions = JSON.stringify({ hasUnsupportedAssumptions: false, unsupportedAssumptions: [], requiredNextActions: [] });
+  const isAuditCall = (payload) => !("tools" in payload) && payload.parallel_tool_calls === false;
+
+  // cap=2, 4 tool-call turns: only the first 2 trigger an audit call
+  // responses order: exec1, audit1, exec2, audit2, exec3, exec4, final
+  const { loop } = makeLoop({
+    config: { enableIntermediateVerifier: true, intermediateAuditMaxPerLoop: 2, maxSteps: 12 },
+    responses: [
+      responseWithToolAndText("r0", functionCall("read_file_range", { path: "src/f0.ts" }, "c0"), "reasoning 0"),
+      (payload) => { if (isAuditCall(payload)) auditCallCount++; return responseWithText("a0", noAssumptions); },
+      responseWithToolAndText("r1", functionCall("read_file_range", { path: "src/f1.ts" }, "c1"), "reasoning 1"),
+      (payload) => { if (isAuditCall(payload)) auditCallCount++; return responseWithText("a1", noAssumptions); },
+      responseWithToolAndText("r2", functionCall("read_file_range", { path: "src/f2.ts" }, "c2"), "reasoning 2"),
+      responseWithToolAndText("r3", functionCall("read_file_range", { path: "src/f3.ts" }, "c3"), "reasoning 3"),
+      responseWithText("final", "done")
+    ],
+    isReadOnly(name) { return name === "read_file_range"; },
+    execute() { return { ok: true, data: {}, summary: "ok" }; }
+  });
+
+  await loop.run("inspect files", true);
+
+  assert.equal(auditCallCount, 2, "audit should stop after intermediateAuditMaxPerLoop");
 });
 
 test("verifier API failures include diagnostic details in feedback", async () => {

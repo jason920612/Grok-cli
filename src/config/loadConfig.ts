@@ -24,6 +24,7 @@ export type GrokCodeConfig = {
   enableVerifier: boolean;
   verifierMaxRetries: number;
   enableIntermediateVerifier: boolean;
+  intermediateAuditMaxPerLoop: number;
 };
 
 export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfig> = {}): GrokCodeConfig {
@@ -47,6 +48,7 @@ export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfi
     enableVerifier: false,
     verifierMaxRetries: 2,
     enableIntermediateVerifier: false,
+    intermediateAuditMaxPerLoop: 5,
     ...projectConfig,
     ...cleanOverrides
   };
