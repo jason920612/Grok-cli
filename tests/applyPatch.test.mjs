@@ -87,6 +87,24 @@ test("list_files shows generated outputs allowed for the current session", async
   assert.deepEqual(result.files, ["coverage/report.txt"]);
 });
 
+test("list_files explains how to continue when results are truncated", async () => {
+  const root = makeWorkspace();
+  fs.mkdirSync(path.join(root, "src", "agent"), { recursive: true });
+  fs.mkdirSync(path.join(root, "src", "context"), { recursive: true });
+  fs.writeFileSync(path.join(root, "src", "agent", "AgentLoop.ts"), "export {}\n");
+  fs.writeFileSync(path.join(root, "src", "context", "ContextManager.ts"), "export {}\n");
+  fs.writeFileSync(path.join(root, "README.md"), "readme\n");
+  const listFiles = listFilesTool(new ToolSkillRegistry(root));
+  const ctx = makeContext(root);
+
+  const result = await listFiles.execute({ maxResults: 1 }, ctx);
+
+  assert.equal(result.truncated, true);
+  assert.match(result.note, /Results are truncated/);
+  assert.match(result.note, /list_files with a subdirectory path/);
+  assert.match(result.note, /src\/agent/);
+});
+
 function makeWorkspace() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "grok-apply-patch-"));
 }

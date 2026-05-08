@@ -42,6 +42,8 @@ Find CLI commands, routes, handlers, public APIs, main entrypoints, stack trace 
 
 Search user-visible words first, then synonyms, implementation terms, error messages, and filename fragments. For example, for "do not read whole files", also search `read_file`, `read_file_range`, `file range`, `context`, `large file`, `token`, and `compaction`.
 
+Use `search_text`, not `search_symbols`, for string-literal concepts: config values, mode names, CLI flags, enum/discriminated-union values, error text, log text, JSON keys, package script names, and user-visible labels. Examples: `hybrid`, `stateless`, `--verifier`, `conversation-mode`, `previous_response_id`, and `test` scripts are text searches first because they may not be TypeScript symbol names.
+
 ### Symbol Branch
 
 Search function, class, type, interface, command name, and tool name definitions. Prefer definition matches over incidental text matches.
@@ -150,6 +152,10 @@ Use tools in this order:
 5. `read_file_range`.
 6. Patch/edit tool.
 7. Tests, typecheck, and git diff.
+
+If `list_files` reports `truncated: true`, do not assume omitted directories are absent. Continue with `list_files` on a concrete subdirectory path such as `src`, `src/agent`, `src/context`, or another visible candidate directory.
+
+If `search_symbols` returns empty or the same irrelevant candidates repeatedly, stop using symbol search for that branch. Switch to `search_text` for exact strings/config values or list a concrete source subdirectory and read likely owner files.
 
 Current MVP uses `search_code`, `find_symbol`, `expand_node`, `get_related_files`, `list_files`, `search_text`, `search_symbols`, `get_file_overview`, and `read_file_range`. Future implementations may replace the lightweight search internals with richer symbol indexes, dependency graphs, or semantic search without changing this workflow.
 

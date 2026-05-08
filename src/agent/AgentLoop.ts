@@ -30,10 +30,21 @@ type FailureRecord = {
   progressVersion: number;
 };
 
+type UnproductiveRecord = {
+  count: number;
+  toolName: string;
+  reason: string;
+  lastArgs: string;
+  signature: string;
+};
+
 class FailureTracker {
   private map = new Map<string, FailureRecord>();
+  private unproductiveByTool = new Map<string, UnproductiveRecord>();
+  private unproductiveByOutcome = new Map<string, UnproductiveRecord>();
   private lastKey: string | undefined;
   private progressVersion = 0;
+  private readonly unproductiveLimit = 3;
 
   record(toolName: string, args: string, error: string): void {
     const key = normalizeFailureKey(toolName, args);
@@ -69,6 +80,54 @@ class FailureTracker {
 
   markProgress(): void {
     this.progressVersion++;
+  }
+
+  recordUnproductive(
+    toolName: string,
+    args: string,
+    outcome: { reason: string; signature: string; countByTool: boolean }
+  ): void {
+    if (outcome.countByTool) {
+      const byTool = this.unproductiveByTool.get(toolName) ?? {
+        count: 0,
+        toolName,
+        reason: outcome.reason,
+        lastArgs: args,
+        signature: outcome.signature
+      };
+      this.unproductiveByTool.set(toolName, {
+        ...byTool,
+        count: byTool.count + 1,
+        reason: outcome.reason,
+        lastArgs: args,
+        signature: outcome.signature
+      });
+    }
+
+    const outcomeKey = `${toolName}:${outcome.signature}`;
+    const byOutcome = this.unproductiveByOutcome.get(outcomeKey) ?? {
+      count: 0,
+      toolName,
+      reason: outcome.reason,
+      lastArgs: args,
+      signature: outcome.signature
+    };
+    this.unproductiveByOutcome.set(outcomeKey, {
+      ...byOutcome,
+      count: byOutcome.count + 1,
+      reason: outcome.reason,
+      lastArgs: args,
+      signature: outcome.signature
+    });
+  }
+
+  repeatedUnproductive(toolName: string): UnproductiveRecord | undefined {
+    const byTool = this.unproductiveByTool.get(toolName);
+    if (byTool && byTool.count >= this.unproductiveLimit) return byTool;
+    for (const record of this.unproductiveByOutcome.values()) {
+      if (record.toolName === toolName && record.count >= this.unproductiveLimit) return record;
+    }
+    return undefined;
   }
 }
 
@@ -468,6 +527,21 @@ export class AgentLoop {
       return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
     }
 
+    const repeatedUnproductive = this.tools.isReadOnly(call.name)
+      ? failureTracker.repeatedUnproductive(call.name)
+      : undefined;
+    if (repeatedUnproductive) {
+      const result = {
+        ok: false,
+        error: {
+          code: "repeated_unproductive_result_blocked",
+          message: buildUnproductiveToolMessage(repeatedUnproductive)
+        }
+      };
+      toolActionSummaries.push({ step, name: call.name, ok: false, summary: result.error.message, args: call.arguments?.slice(0, 300) });
+      return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
+    }
+
     const result = await this.tools.execute(call.name, args, this.toolCtx);
     throwIfAborted(signal);
 
@@ -480,6 +554,9 @@ export class AgentLoop {
         ? result.error.message
         : `Command exited with code ${shellExitCode}: ${String((result.data as any)?.stdout ?? "").slice(0, 200)}`;
       failureTracker.record(call.name, call.arguments ?? "{}", errorMsg);
+    } else if (result.ok && this.tools.isReadOnly(call.name)) {
+      const unproductive = classifyUnproductiveResult(call.name, result.data);
+      if (unproductive) failureTracker.recordUnproductive(call.name, call.arguments ?? "{}", unproductive);
     } else if (!this.tools.isReadOnly(call.name) && !isShellTool(call.name)) {
       failureTracker.markProgress();
     }
@@ -513,6 +590,69 @@ function formatToolBatch(step: number, toolNames: string[]): string {
 function summarizeToolResult(result: Awaited<ReturnType<ToolRegistry["execute"]>>): string {
   if (!result.ok) return result.error.message;
   return result.summary ?? JSON.stringify(result.data).slice(0, 240);
+}
+
+function classifyUnproductiveResult(
+  toolName: string,
+  data: unknown
+): { reason: string; signature: string; countByTool: boolean } | undefined {
+  const value = data as Record<string, unknown> | undefined;
+  if (!value) return undefined;
+
+  if (Array.isArray(value.results)) {
+    if (value.results.length === 0) {
+      return {
+        reason: `${toolName} returned no results`,
+        signature: "empty-results",
+        countByTool: true
+      };
+    }
+    if (toolName === "search_symbols") {
+      return {
+        reason: "search_symbols returned the same candidate set repeatedly",
+        signature: stableSignature(value.results),
+        countByTool: false
+      };
+    }
+  }
+
+  if (Array.isArray(value.files) && value.files.length === 0) {
+    return {
+      reason: `${toolName} returned no files`,
+      signature: "empty-files",
+      countByTool: true
+    };
+  }
+
+  return undefined;
+}
+
+function stableSignature(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function buildUnproductiveToolMessage(record: UnproductiveRecord): string {
+  const base =
+    `${record.toolName} has returned unproductive results ${record.count} times in this session` +
+    ` (${record.reason}).`;
+  if (record.toolName === "search_symbols") {
+    return (
+      `${base} Switch strategy: use search_text for string values, config modes, option names, ` +
+      `or user-visible keywords; or call list_files with a concrete subdirectory such as "src/agent" ` +
+      `and then read_file_range on likely owner files.`
+    );
+  }
+  if (record.toolName === "list_files") {
+    return (
+      `${base} Switch strategy: call list_files with a narrower subdirectory path, use search_text ` +
+      `for exact strings, or read a known candidate file range.`
+    );
+  }
+  return `${base} Switch strategy: use a different search tool, narrow the scope, or read a concrete file range.`;
 }
 
 function formatActionSummary(actions: ToolActionSummary[]): string {

@@ -170,6 +170,32 @@ test("multiple tool calls are rejected and corrected before execution", async ()
   assert.match(String(payloads[1].input), /exactly one tool call/);
 });
 
+test("repeated empty search_symbols results are blocked with a strategy correction", async () => {
+  const { loop, toolCalls } = makeLoop({
+    responses: [
+      responseWithTool("r1", functionCall("search_symbols", { query: "verifier" }, "c1")),
+      responseWithTool("r2", functionCall("search_symbols", { query: "hybrid" }, "c2")),
+      responseWithTool("r3", functionCall("search_symbols", { query: "conversation-mode" }, "c3")),
+      responseWithTool("r4", functionCall("search_symbols", { query: "stateless" }, "c4")),
+      responseWithText("r5", "done")
+    ],
+    isReadOnly(name) {
+      return name === "search_symbols";
+    },
+    execute(name) {
+      if (name === "search_symbols") return { ok: true, data: { results: [] }, summary: "no symbols" };
+      return { ok: true, data: {}, summary: "ok" };
+    }
+  });
+
+  const output = await loop.run("find hybrid verifier issue", true);
+
+  assert.equal(toolCalls.filter((call) => call.name === "search_symbols").length, 3);
+  assert.match(output, /search_symbols has returned unproductive results 3 times/);
+  assert.match(output, /Switch strategy: use search_text for string values/);
+  assert.match(output, /list_files with a concrete subdirectory/);
+});
+
 test("verifier audits zero-tool final answers and reports retry exhaustion", async () => {
   const { loop, payloads } = makeLoop({
     config: { enableVerifier: true, verifierMaxRetries: 1 },

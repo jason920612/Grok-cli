@@ -20,8 +20,17 @@ export function listFilesTool(skills: ToolSkillRegistry) {
         .map((entry) => (base === "." ? entry : `${base.replace(/\\/g, "/")}/${entry}`))
         .filter((entry) => !ctx.sandbox.isPathDenied(entry, "read"))
         .slice(0, args.maxResults ?? 200);
-      ctx.context.add({ type: "search_result", content: `list_files ${base} ${pattern}\n${files.join("\n")}`, priority: 45, expiresAfterSteps: 3 });
-      return { files, truncated: entries.length > files.length };
+      const truncated = entries.length > files.length;
+      const note = truncated
+        ? `Results are truncated. Call list_files with a subdirectory path (for example "src", "src/agent", or another visible directory) to continue discovery.`
+        : undefined;
+      ctx.context.add({
+        type: "search_result",
+        content: `list_files ${base} ${pattern}\n${files.join("\n")}${note ? `\n[Note: ${note}]` : ""}`,
+        priority: 45,
+        expiresAfterSteps: 3
+      });
+      return { files, truncated, note };
     }
   );
 }
