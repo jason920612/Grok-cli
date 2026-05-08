@@ -168,7 +168,7 @@ test("verifier audits zero-tool final answers and reports retry exhaustion", asy
     responses: [
       responseWithText("r1", "src/agent/Agent.ts exports Agent"),
       (payload) => {
-        assert.equal(payload.tool_choice, "none");
+        assert.equal("tool_choice" in payload, false);
         return responseWithText(
           "v1",
           JSON.stringify({
@@ -188,7 +188,10 @@ test("verifier audits zero-tool final answers and reports retry exhaustion", asy
 
   const output = await loop.run("does src/agent/Agent.ts export Agent?", true);
 
-  const verifierInput = payloads.find((payload) => payload.tool_choice === "none")?.input;
+  const verifierPayload = payloads.find((payload) => payload.parallel_tool_calls === false);
+  const verifierInput = JSON.stringify(verifierPayload?.input);
+  assert.equal("tools" in verifierPayload, false);
+  assert.equal("tool_choice" in verifierPayload, false);
   assert.match(String(verifierInput), /No tool calls recorded/);
   assert.match(output, /Retry budget exhausted/);
   assert.match(output, /read src\/agent\/Agent\.ts/);
@@ -219,7 +222,7 @@ test("verifier receives runtime memory facts with provenance", async () => {
     responses: [
       responseWithText("r1", "src/agent/Agent.ts exports Agent"),
       (payload) => {
-        assert.equal(payload.tool_choice, "none");
+        assert.equal("tool_choice" in payload, false);
         return responseWithText(
           "v1",
           JSON.stringify({
@@ -238,7 +241,7 @@ test("verifier receives runtime memory facts with provenance", async () => {
 
   await loop.run("does src/agent/Agent.ts export Agent?", true);
 
-  const verifierInput = String(payloads.find((payload) => payload.tool_choice === "none")?.input);
+  const verifierInput = JSON.stringify(payloads.find((payload) => payload.parallel_tool_calls === false)?.input);
   assert.match(verifierInput, /<runtime_memory_facts>/);
   assert.match(verifierInput, /confidence=verified/);
   assert.match(verifierInput, /path=src\/agent\/Agent\.ts/);
@@ -252,7 +255,7 @@ test("verifier receives visible executor trace as claims not evidence", async ()
       responseWithTool("r1", functionCall("read_file_range", { path: "src/agent/Agent.ts", startLine: 1, endLine: 20 }, "c1")),
       responseWithText("r2", "The function already handles null values."),
       (payload) => {
-        assert.equal(payload.tool_choice, "none");
+        assert.equal("tool_choice" in payload, false);
         return responseWithText(
           "v1",
           JSON.stringify({
@@ -283,7 +286,29 @@ test("verifier receives visible executor trace as claims not evidence", async ()
 
   await loop.run("check null handling", true);
 
-  const verifierInput = String(payloads.find((payload) => payload.tool_choice === "none")?.input);
+  const verifierInput = JSON.stringify(payloads.find((payload) => payload.parallel_tool_calls === false)?.input);
   assert.match(verifierInput, /<executor_visible_trace_claims_not_evidence>/);
   assert.match(verifierInput, /The function already handles null values/);
+});
+
+test("verifier API failures include diagnostic details in feedback", async () => {
+  const apiError = new Error("Connection error.");
+  apiError.status = 503;
+  apiError.code = "service_unavailable";
+  const { loop } = makeLoop({
+    config: { enableVerifier: true, verifierMaxRetries: 1 },
+    responses: [
+      responseWithText("r1", "4"),
+      () => {
+        throw apiError;
+      },
+      responseWithText("r2", "4")
+    ]
+  });
+
+  const output = await loop.run("What is 2+2?", true);
+
+  assert.match(output, /Verifier API call failed: Connection error\./);
+  assert.match(output, /status=503/);
+  assert.match(output, /code=service_unavailable/);
 });

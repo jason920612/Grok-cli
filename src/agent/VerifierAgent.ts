@@ -1,6 +1,5 @@
 import type OpenAI from "openai";
 import type { GrokCodeConfig } from "../config/loadConfig.js";
-import { createResponse } from "../api/responsesClient.js";
 import { parseResponse } from "../api/responseParser.js";
 import type { EvidenceBundle, VerifierVerdict, UnsupportedAssumption } from "./EvidenceBundle.js";
 
@@ -49,14 +48,13 @@ export class VerifierAgent {
     const input = buildVerifierInput(bundle);
     let response: any;
     try {
-      response = await createResponse(this.client, {
+      response = await (this.client as any).responses.create({
         model: this.config.model,
-        input,
-        tools: [],
-        toolChoice: "none"
+        input: [{ role: "user", content: input }],
+        parallel_tool_calls: false
       });
-    } catch {
-      return fallbackVerdict("Verifier API call failed.");
+    } catch (error) {
+      return fallbackVerdict(`Verifier API call failed: ${formatApiError(error)}`);
     }
     const parsed = parseResponse(response);
     return parseVerifierVerdict(parsed.finalText);
@@ -203,4 +201,31 @@ function fallbackVerdict(reason: string): VerifierVerdict {
     requiredNextActions: [],
     confidence: "low"
   };
+}
+
+function formatApiError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const details = error as Error & {
+    status?: unknown;
+    code?: unknown;
+    type?: unknown;
+    error?: unknown;
+  };
+  const parts = [
+    details.message,
+    details.status !== undefined ? `status=${String(details.status)}` : undefined,
+    details.code !== undefined ? `code=${String(details.code)}` : undefined,
+    details.type !== undefined ? `type=${String(details.type)}` : undefined,
+    details.error !== undefined ? `error=${stringifyErrorDetail(details.error)}` : undefined
+  ].filter(Boolean);
+  return parts.join("; ");
+}
+
+function stringifyErrorDetail(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
