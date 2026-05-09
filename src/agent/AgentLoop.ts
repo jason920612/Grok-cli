@@ -267,6 +267,7 @@ export class AgentLoop {
                 pinned: false,
                 expiresAfterSteps: 4
               });
+              recordVerifierTasks(this.context, verdict);
               pendingInput = feedback;
               step++;
               continue;
@@ -508,6 +509,27 @@ function buildVerifierMemoryFacts(items: ContextItem[]): EvidenceMemoryFact[] {
       factConfidence: item.factConfidence ?? "uncertain",
       source: item.source
     }));
+}
+
+function recordVerifierTasks(
+  context: ContextManager,
+  verdict: import("./EvidenceBundle.js").VerifierVerdict
+): void {
+  const tasks = [
+    ...verdict.requiredNextActions,
+    ...verdict.unsupportedAssumptions.map((item) => item.requiredVerification)
+  ].filter((item): item is string => Boolean(item.trim()));
+
+  for (const task of [...new Set(tasks)]) {
+    context.add({
+      type: "verification_task",
+      content: task,
+      priority: 90,
+      expiresAfterSteps: 6,
+      factSource: "model_inference",
+      factConfidence: "uncertain"
+    });
+  }
 }
 
 function oneLine(value: string, max: number): string {
