@@ -119,6 +119,43 @@ test("stateless plan-only reprompt is injected into the next stateless prompt", 
   assert.match(String(payloads[1].input), /<Runtime Feedback>/);
 });
 
+test("stateless prompt separates verified facts, prior actions, and inferences", async () => {
+  const { loop, payloads } = makeLoop({
+    config: { conversationMode: "stateless" },
+    contextItems: [
+      {
+        type: "task_summary",
+        content: "Likely needs parser changes.",
+        priority: 60,
+        factSource: "model_inference",
+        factConfidence: "inferred",
+        tokensEstimate: 10
+      }
+    ],
+    responses: [
+      responseWithTool("r1", functionCall("read_file_range", { path: "src/parser.ts", startLine: 1, endLine: 20 }, "c1")),
+      responseWithText("r2", "done")
+    ],
+    isReadOnly(name) {
+      return name === "read_file_range";
+    },
+    execute(name, args) {
+      return { ok: true, data: {}, summary: `${name} ${args.path}` };
+    }
+  });
+
+  await loop.run("inspect parser", true);
+
+  const secondInput = String(payloads[1].input);
+  assert.match(secondInput, /<Situation Memory>/);
+  assert.match(secondInput, /Verified workspace \/ runtime observations:/);
+  assert.match(secondInput, /read_file_range succeeded: read_file_range src\/parser\.ts/);
+  assert.match(secondInput, /Prior local agent actions:/);
+  assert.match(secondInput, /step 1: read_file_range/);
+  assert.match(secondInput, /Model inferences \/ hypotheses, not verified facts:/);
+  assert.match(secondInput, /Likely needs parser changes/);
+});
+
 test("failed shell verification command can rerun after a successful patch", async () => {
   const { loop, toolCalls } = makeLoop({
     responses: [
