@@ -162,6 +162,22 @@ test("multiple tool calls are rejected and corrected before execution", async ()
   assert.match(String(payloads[1].input), /exactly one tool call/);
 });
 
+test("hybrid resets conversation after invalid plan-only response", async () => {
+  const { loop, payloads } = makeLoop({
+    config: { conversationMode: "hybrid" },
+    responses: [
+      responseWithText("r1", "I will now use tools to inspect it."),
+      responseWithText("r2", "done")
+    ]
+  });
+
+  await loop.run("fix bug", true);
+
+  assert.equal(payloads[1].previous_response_id, undefined);
+  assert.match(String(payloads[1].input), /<Current Task>/);
+  assert.match(String(payloads[1].input), /<Runtime Feedback>/);
+});
+
 test("verifier audits zero-tool final answers and reports retry exhaustion", async () => {
   const { loop, payloads } = makeLoop({
     config: { enableVerifier: true, verifierMaxRetries: 1 },
