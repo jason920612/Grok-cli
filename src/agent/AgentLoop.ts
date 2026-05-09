@@ -121,6 +121,7 @@ export class AgentLoop {
     const failureTracker = new FailureTracker();
     let chainLength = 0;
     let consecutiveFailures = 0;
+    let invalidResponses = 0;
 
     this.context.upsert("user-task", { type: "user_task", content: task, priority: 100, pinned: true });
 
@@ -142,9 +143,10 @@ export class AgentLoop {
 
       const shouldResetChain =
         mode === "hybrid" &&
-        step > 1 &&
-        (chainLength >= this.config.hybridResetAfterTurns ||
-          consecutiveFailures >= this.config.hybridResetAfterFailures);
+          step > 1 &&
+          (chainLength >= this.config.hybridResetAfterTurns ||
+          consecutiveFailures >= this.config.hybridResetAfterFailures ||
+          invalidResponses > 0);
 
       let stepInput: any;
       let stepPreviousResponseId: string | undefined;
@@ -155,6 +157,7 @@ export class AgentLoop {
             `[Hybrid] Resetting conversation chain at step ${step} (turns=${chainLength}, consecutive failures=${consecutiveFailures})`
           );
           chainLength = 0;
+          invalidResponses = 0;
           previousResponseId = undefined;
         }
         stepInput = buildStatelessInput({
@@ -210,6 +213,7 @@ export class AgentLoop {
           console.log("[Warning] Empty response from model. Requesting continuation.");
           runtimeFeedback =
             "Your previous response was empty. Continue by emitting exactly one tool call or a final answer. Do not respond with only narration.";
+          invalidResponses++;
           pendingInput = runtimeFeedback;
           step++;
           continue;
@@ -233,6 +237,7 @@ export class AgentLoop {
           );
           runtimeFeedback =
             "You provided a plan but did not request any function_call tools. The user asked for an action, not only a plan. Continue now by requesting exactly one appropriate tool in this response. If the action cannot be completed, explain the concrete blocker after using any relevant inspection tools.";
+          invalidResponses++;
           pendingInput = runtimeFeedback;
           step++;
           continue;
@@ -293,6 +298,7 @@ export class AgentLoop {
         runtimeFeedback =
           `Invalid response: requested ${parsed.functionCalls.length} tool calls in one turn. ` +
           "Continue by requesting exactly one tool call, or provide a final answer if the task is complete.";
+        invalidResponses++;
         pendingInput = runtimeFeedback;
         step++;
         continue;
@@ -322,6 +328,7 @@ export class AgentLoop {
         pendingInput = outputs;
       }
       runtimeFeedback = undefined;
+      invalidResponses = 0;
 
       step++;
     }
