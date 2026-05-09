@@ -35,7 +35,7 @@ export async function main(): Promise<void> {
     .option("--approval <mode>", "on-request|auto-local|auto-safe|auto-all|never", "on-request")
     .option("--profile <profile>", "Sandbox profile: default|build|test|debug|package|docs", "default")
     .option("--tool-choice <choice>", "auto|required|none", "auto")
-    .option("--max-steps <number>", "Maximum agent steps", "30")
+    .option("--max-steps <number>", "Maximum agent steps", "50")
     .option("--no-server-tools", "Disable xAI server-side tools")
     .option("--no-web-search", "Disable xAI web_search server-side tool")
     .option("--no-x-search", "Disable xAI x_search server-side tool")

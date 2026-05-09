@@ -33,7 +33,7 @@ export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfi
     model: "grok-4.3",
     approval: "on-request",
     toolChoice: "auto",
-    maxSteps: 30,
+    maxSteps: 50,
     serverTools: true,
     enableWebSearch: true,
     enableXSearch: true,

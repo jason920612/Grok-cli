@@ -60,7 +60,7 @@ Global flags:
 --approval <on-request|auto-local|auto-safe|auto-all|never>
 --profile <default|build|test|debug|package|docs>
 --tool-choice <auto|required|none>
---max-steps <number>
+--max-steps <number> (default: 50)
 --conversation-mode <stateless|stateful|hybrid>
 --no-server-tools
 --no-web-search
