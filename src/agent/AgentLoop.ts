@@ -276,6 +276,7 @@ export class AgentLoop {
                 pinned: false,
                 expiresAfterSteps: 4
               });
+              recordVerifierTasks(this.context, verdict);
               pendingInput = feedback;
               step++;
               continue;
@@ -530,6 +531,27 @@ function buildStatelessInferences(items: ContextItem[]): string[] {
     .filter((item) => item.factConfidence === "inferred" || item.factSource === "model_inference")
     .slice(-10)
     .map((item) => `${item.type}: ${oneLine(item.content, 300)}`);
+}
+
+function recordVerifierTasks(
+  context: ContextManager,
+  verdict: import("./EvidenceBundle.js").VerifierVerdict
+): void {
+  const tasks = [
+    ...verdict.requiredNextActions,
+    ...verdict.unsupportedAssumptions.map((item) => item.requiredVerification)
+  ].filter((item): item is string => Boolean(item.trim()));
+
+  for (const task of [...new Set(tasks)]) {
+    context.add({
+      type: "verification_task",
+      content: task,
+      priority: 90,
+      expiresAfterSteps: 6,
+      factSource: "model_inference",
+      factConfidence: "uncertain"
+    });
+  }
 }
 
 function oneLine(value: string, max: number): string {

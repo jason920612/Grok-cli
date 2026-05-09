@@ -55,7 +55,13 @@ function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = 
       ...config
     },
     {
-      upsert() {},
+      upsert(id, item) {
+        const existingIndex = storedContextItems.findIndex((entry) => entry.id === id);
+        const full = { ...item, id, tokensEstimate: item.tokensEstimate ?? 1 };
+        if (existingIndex === -1) storedContextItems.push(full);
+        else storedContextItems[existingIndex] = full;
+        return full;
+      },
       nextStep() {},
       relevant() {
         return storedContextItems;
@@ -100,7 +106,7 @@ function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = 
     },
     ""
   );
-  return { loop, payloads, toolCalls };
+  return { loop, payloads, toolCalls, contextItems: storedContextItems };
 }
 
 test("stateless plan-only reprompt is injected into the next stateless prompt", async () => {
@@ -262,7 +268,7 @@ test("hybrid resets conversation after invalid plan-only response", async () => 
 });
 
 test("verifier audits zero-tool final answers and reports retry exhaustion", async () => {
-  const { loop, payloads } = makeLoop({
+  const { loop, payloads, contextItems } = makeLoop({
     config: { enableVerifier: true, verifierMaxRetries: 1 },
     responses: [
       responseWithText("r1", "src/agent/Agent.ts exports Agent"),
@@ -294,6 +300,12 @@ test("verifier audits zero-tool final answers and reports retry exhaustion", asy
   assert.match(String(verifierInput), /No tool calls recorded/);
   assert.match(output, /Retry budget exhausted/);
   assert.match(output, /read src\/agent\/Agent\.ts/);
+  assert.deepEqual(
+    contextItems
+      .filter((item) => item.type === "verification_task")
+      .map((item) => item.content),
+    ["read_file_range src/agent/Agent.ts"]
+  );
 });
 
 test("verifier receives runtime memory facts with provenance", async () => {
