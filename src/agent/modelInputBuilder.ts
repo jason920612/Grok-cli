@@ -14,7 +14,9 @@ export type ModelInputBuildOptions = {
 
 export type StatelessInputBuildOptions = {
   task: string;
-  verifiedObservations: string[];
+  verifiedFacts: string[];
+  priorActions: string[];
+  inferredFacts?: string[];
   lastFailure?: {
     toolName: string;
     args: string;
@@ -30,9 +32,15 @@ export type StatelessInputBuildOptions = {
 };
 
 export function buildStatelessInput(options: StatelessInputBuildOptions): string {
-  const observations = options.verifiedObservations.length > 0
-    ? options.verifiedObservations.map((o) => `- ${o}`).join("\n")
+  const verifiedFacts = options.verifiedFacts.length > 0
+    ? options.verifiedFacts.map((o) => `- ${o}`).join("\n")
     : "None yet.";
+  const priorActions = options.priorActions.length > 0
+    ? options.priorActions.map((o) => `- ${o}`).join("\n")
+    : "None yet.";
+  const inferredFacts = options.inferredFacts && options.inferredFacts.length > 0
+    ? options.inferredFacts.map((o) => `- ${o}`).join("\n")
+    : "None recorded.";
 
   const failureSection = options.lastFailure
     ? `\n<Last Failure>
@@ -82,9 +90,19 @@ ${options.projectInstructions || "None."}
 ${options.task}
 </Current Task>
 
-<Verified Workspace Observations>
-${observations}
-</Verified Workspace Observations>
+<Situation Memory>
+Current user request:
+${options.task}
+
+Verified workspace / runtime observations:
+${verifiedFacts}
+
+Prior local agent actions:
+${priorActions}
+
+Model inferences / hypotheses, not verified facts:
+${inferredFacts}
+</Situation Memory>
 ${failureSection}${verifierSection}${runtimeFeedbackSection}`;
 }
 

@@ -159,9 +159,13 @@ export class AgentLoop {
         }
         stepInput = buildStatelessInput({
           task,
-          verifiedObservations: toolActionSummaries.map(
+          verifiedFacts: toolActionSummaries.map(
             (s) => `${s.name} ${s.ok ? "succeeded" : "failed"}: ${s.summary}`
           ),
+          priorActions: toolActionSummaries.map(
+            (s) => `step ${s.step}: ${s.name}(${s.args ?? ""}) -> ${s.ok ? "ok" : "failed"}`
+          ),
+          inferredFacts: buildStatelessInferences(this.context.relevant(task, 20_000)),
           lastFailure: failureTracker.lastFailure(),
           verifierFeedback: lastVerifierFeedback,
           runtimeFeedback,
@@ -508,6 +512,13 @@ function buildVerifierMemoryFacts(items: ContextItem[]): EvidenceMemoryFact[] {
       factConfidence: item.factConfidence ?? "uncertain",
       source: item.source
     }));
+}
+
+function buildStatelessInferences(items: ContextItem[]): string[] {
+  return items
+    .filter((item) => item.factConfidence === "inferred" || item.factSource === "model_inference")
+    .slice(-10)
+    .map((item) => `${item.type}: ${oneLine(item.content, 300)}`);
 }
 
 function oneLine(value: string, max: number): string {
