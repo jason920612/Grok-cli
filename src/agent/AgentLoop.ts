@@ -413,20 +413,11 @@ export class AgentLoop {
   ): Promise<{ type: "function_call_output"; call_id: string; output: string }> {
     throwIfAborted(signal);
     usedToolNames.add(call.name);
+    const rawArgs = call.arguments ?? "{}";
 
-    let args: unknown;
-    try {
-      args = JSON.parse(call.arguments || "{}");
-    } catch (error) {
-      const result = {
-        ok: false,
-        error: { code: "json_parse_error", message: error instanceof Error ? error.message : String(error) }
-      };
-      return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
-    }
-
-    // Repeated failure guard: block non-read-only tools that have already failed with the same args
-    if (!this.tools.isReadOnly(call.name) && failureTracker.isRepeated(call.name, call.arguments ?? "{}")) {
+    // Repeated failure guard: block exact repeats of any tool call that failed
+    // without intervening progress, including read-only inspection calls.
+    if (failureTracker.isRepeated(call.name, rawArgs)) {
       const prior = failureTracker.lastFailure();
       const result = {
         ok: false,
@@ -438,7 +429,20 @@ export class AgentLoop {
             `. Choose a different approach: narrow the scope, inspect the root cause, or change strategy.`
         }
       };
-      toolActionSummaries.push({ step, name: call.name, ok: false, summary: result.error.message, args: call.arguments?.slice(0, 300) });
+      toolActionSummaries.push({ step, name: call.name, ok: false, summary: `${result.error.code}: ${result.error.message}`, args: call.arguments?.slice(0, 300) });
+      return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
+    }
+
+    let args: unknown;
+    try {
+      args = JSON.parse(rawArgs);
+    } catch (error) {
+      const result = {
+        ok: false,
+        error: { code: "json_parse_error", message: error instanceof Error ? error.message : String(error) }
+      };
+      failureTracker.record(call.name, rawArgs, result.error.message);
+      toolActionSummaries.push({ step, name: call.name, ok: false, summary: `${result.error.code}: ${result.error.message}`, args: call.arguments?.slice(0, 300) });
       return { type: "function_call_output", call_id: call.call_id, output: JSON.stringify(result) };
     }
 
@@ -453,7 +457,7 @@ export class AgentLoop {
       const errorMsg = !result.ok
         ? result.error.message
         : `Command exited with code ${shellExitCode}: ${String((result.data as any)?.stdout ?? "").slice(0, 200)}`;
-      failureTracker.record(call.name, call.arguments ?? "{}", errorMsg);
+      failureTracker.record(call.name, rawArgs, errorMsg);
     } else if (!this.tools.isReadOnly(call.name) && !isShellTool(call.name)) {
       failureTracker.markProgress();
     }

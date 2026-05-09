@@ -177,6 +177,52 @@ test("failed shell verification command can rerun after a successful patch", asy
   assert.doesNotMatch(output, /repeated_failure_blocked/);
 });
 
+test("repeated failure guard blocks identical read-only failures", async () => {
+  const { loop, toolCalls } = makeLoop({
+    responses: [
+      responseWithTool("r1", functionCall("read_file_range", { path: "missing.ts" }, "c1")),
+      responseWithTool("r2", functionCall("read_file_range", { path: "missing.ts" }, "c2")),
+      responseWithText("r3", "final")
+    ],
+    isReadOnly(name) {
+      return name === "read_file_range";
+    },
+    execute() {
+      return { ok: false, error: { code: "not_found", message: "missing.ts not found" } };
+    }
+  });
+
+  const output = await loop.run("inspect missing file", true);
+
+  assert.equal(toolCalls.length, 1);
+  assert.match(output, /repeated_failure_blocked/);
+});
+
+test("repeated failure guard records malformed tool arguments", async () => {
+  const malformedCall = {
+    type: "function_call",
+    name: "read_file_range",
+    call_id: "bad-json",
+    arguments: "{"
+  };
+  const { loop, toolCalls } = makeLoop({
+    responses: [
+      responseWithTool("r1", malformedCall),
+      responseWithTool("r2", { ...malformedCall, call_id: "bad-json-again" }),
+      responseWithText("r3", "final")
+    ],
+    isReadOnly(name) {
+      return name === "read_file_range";
+    }
+  });
+
+  const output = await loop.run("inspect file", true);
+
+  assert.equal(toolCalls.length, 0);
+  assert.match(output, /json_parse_error/);
+  assert.match(output, /repeated_failure_blocked/);
+});
+
 test("multiple tool calls are rejected and corrected before execution", async () => {
   const { loop, payloads, toolCalls } = makeLoop({
     config: { conversationMode: "stateless" },
