@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { z, type ZodTypeAny } from "zod";
 import type { AgentTool, ToolExecutionContext } from "../AgentTool.js";
+import { assertSchemaMatchesZod } from "../toolSchemas.js";
 import type { ToolSkillRegistry } from "../../tool-skills/ToolSkillRegistry.js";
 
 const execFileAsync = promisify(execFile);
@@ -14,6 +15,7 @@ export function makeTool<T extends ZodTypeAny>(
   skillRegistry: ToolSkillRegistry,
   execute: (args: z.infer<T>, ctx: ToolExecutionContext) => Promise<unknown>
 ): AgentTool {
+  assertSchemaMatchesZod(name, parameters, validator);
   return {
     name,
     description,

@@ -15,6 +15,7 @@ export function getFileOverviewTool(skills: ToolSkillRegistry) {
     async (args, ctx) => {
       const content = await readTextFile(ctx.sandbox, args.path);
       const overview = getFileOverviewContent(content);
+      ctx.engine?.recordExistence([args.path]);
       ctx.context.add({ type: "file_overview", content: `${args.path}\n${JSON.stringify(overview, null, 2)}`, priority: 60, expiresAfterSteps: 5, source: { path: args.path } });
       return overview;
     }

@@ -19,9 +19,9 @@ Use this skill when the user asks to write a commit, create commits, commit chan
 1. Call `git_status`.
 2. Call `git_diff`.
 3. Confirm ignored secrets are not tracked when relevant, especially `.env`.
-4. Use `run_shell` for targeted `git add` commands.
-5. Use `run_shell` for `git commit -m "..."`
-6. If the user requested push, use `run_shell` for `git push origin <branch>` or the current branch's upstream push.
+4. Use `run_python` for targeted `git add`, e.g. `subprocess.run(["git","add","path"])`.
+5. Use `run_python` for commit: `subprocess.run(["git","commit","-m","..."])`.
+6. If the user requested push, use `run_python`: `subprocess.run(["git","push","origin","<branch>"])` or the current branch's upstream push.
 7. Call `git_status` again.
 8. Final answer must include commit hash/message, pushed branch, checks run, and any files intentionally not committed.
 

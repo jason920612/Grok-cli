@@ -1,4 +1,5 @@
 import { ToolRegistry } from "../ToolRegistry.js";
+import { TOOL_EFFECTS, validateToolEffects } from "../toolEffects.js";
 import type { ToolSkillRegistry } from "../../tool-skills/ToolSkillRegistry.js";
 import { inspectEnvironmentTool } from "./inspectEnvironment.js";
 import { checkProjectToolingTool } from "./checkProjectTooling.js";
@@ -13,7 +14,7 @@ import { getRelatedFilesTool } from "./getRelatedFiles.js";
 import { expandNodeTool } from "./expandNode.js";
 import { createSkillTool } from "./createSkill.js";
 import { applyPatchTool } from "./applyPatch.js";
-import { runShellTool } from "./runShell.js";
+import { runPythonTool } from "./runPython.js";
 import { gitStatusTool } from "./gitStatus.js";
 import { gitDiffTool } from "./gitDiff.js";
 import { startBackgroundCommandTool } from "./startBackgroundCommand.js";
@@ -36,7 +37,7 @@ export const LOCAL_TOOL_NAMES = [
   "expand_node",
   "create_skill",
   "apply_patch",
-  "run_shell",
+  "run_python",
   "git_status",
   "git_diff",
   "start_background_command",
@@ -46,25 +47,8 @@ export const LOCAL_TOOL_NAMES = [
   "stop_all_background_commands"
 ];
 
-const READ_ONLY_LOCAL_TOOL_NAMES = new Set([
-  "inspect_environment",
-  "check_project_tooling",
-  "list_files",
-  "get_file_overview",
-  "read_file_range",
-  "search_text",
-  "search_symbols",
-  "search_code",
-  "find_symbol",
-  "get_related_files",
-  "expand_node",
-  "git_status",
-  "git_diff",
-  "list_background_commands",
-  "read_background_output"
-]);
-
 export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry {
+  validateToolEffects(LOCAL_TOOL_NAMES);
   const registry = new ToolRegistry();
   for (const tool of [
     inspectEnvironmentTool(skills),
@@ -80,7 +64,7 @@ export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry
     expandNodeTool(skills),
     createSkillTool(skills),
     applyPatchTool(skills),
-    runShellTool(skills),
+    runPythonTool(skills),
     gitStatusTool(skills),
     gitDiffTool(skills),
     startBackgroundCommandTool(skills),
@@ -89,7 +73,8 @@ export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry
     stopBackgroundCommandTool(skills),
     stopAllBackgroundCommandsTool(skills)
   ]) {
-    tool.readOnly = READ_ONLY_LOCAL_TOOL_NAMES.has(tool.name);
+    tool.effects = TOOL_EFFECTS[tool.name];
+    tool.readOnly = tool.effects.readOnly;
     registry.register(tool);
   }
   return registry;

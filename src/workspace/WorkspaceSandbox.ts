@@ -6,6 +6,14 @@ import { GENERATED_OUTPUT_DIRS, generatedOutputDirsForProfile } from "./IgnoreRu
 type SandboxOperation = "read" | "patch";
 type SandboxRule = "allowed" | "sensitive-path-denied" | "generated-output-read-denied" | "generated-output-patch-denied";
 
+/** Unified rejection type for every sandbox boundary violation (§9.1). */
+export class SandboxViolationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandboxViolationError";
+  }
+}
+
 export class WorkspaceSandbox {
   readonly root: string;
   readonly profile: SandboxProfile;
@@ -23,7 +31,7 @@ export class WorkspaceSandbox {
     const resolved = path.resolve(this.root, inputPath);
     const parent = fs.existsSync(resolved) ? resolved : path.dirname(resolved);
     const realParent = fs.realpathSync(parent);
-    if (!isInside(realParent, this.root)) throw new Error(`Path escapes workspace: ${inputPath}`);
+    if (!isInside(realParent, this.root)) throw new SandboxViolationError(`Path escapes workspace: ${inputPath}`);
     return resolved;
   }
 
@@ -36,12 +44,12 @@ export class WorkspaceSandbox {
     const rel = this.relative(abs);
     this.assertAllowedPath(rel, "read");
     const realAbs = fs.realpathSync(abs);
-    if (!isInside(realAbs, this.root)) throw new Error(`Path escapes workspace: ${inputPath}`);
+    if (!isInside(realAbs, this.root)) throw new SandboxViolationError(`Path escapes workspace: ${inputPath}`);
     const realRel = this.relative(realAbs);
     this.assertAllowedPath(realRel, "read");
     const stat = fs.statSync(realAbs);
-    if (!stat.isFile()) throw new Error(`Not a file: ${rel}`);
-    if (looksBinary(realAbs)) throw new Error(`Binary file rejected: ${rel}`);
+    if (!stat.isFile()) throw new SandboxViolationError(`Not a file: ${rel}`);
+    if (looksBinary(realAbs)) throw new SandboxViolationError(`Binary file rejected: ${rel}`);
     return realAbs;
   }
 
@@ -55,7 +63,7 @@ export class WorkspaceSandbox {
 
   allowGeneratedOutputPath(inputPath: string): void {
     const abs = fs.realpathSync(path.resolve(this.root, inputPath));
-    if (!isInside(abs, this.root)) throw new Error(`Path escapes workspace: ${inputPath}`);
+    if (!isInside(abs, this.root)) throw new SandboxViolationError(`Path escapes workspace: ${inputPath}`);
     this.sessionAllowedGeneratedRoots.add(this.relative(abs));
   }
 
@@ -78,7 +86,7 @@ export class WorkspaceSandbox {
   private assertAllowedPath(relPath: string, operation: SandboxOperation): void {
     const decision = this.inspectPath(relPath, operation);
     if (decision.rule === "allowed") return;
-    throw new Error(formatSandboxBlock(decision.rule, relPath, operation, this.profile, decision.suggestedProfile));
+    throw new SandboxViolationError(formatSandboxBlock(decision.rule, relPath, operation, this.profile, decision.suggestedProfile));
   }
 
   private isSessionAllowedGeneratedPath(relPath: string): boolean {
@@ -92,7 +100,7 @@ export class WorkspaceSandbox {
     if (inputPath.includes("\0")) throw new Error("Invalid path.");
     const resolved = path.resolve(this.root, inputPath);
     const realParent = fs.realpathSync(nearestExistingAncestor(resolved));
-    if (!isInside(realParent, this.root)) throw new Error(`Path escapes workspace: ${inputPath}`);
+    if (!isInside(realParent, this.root)) throw new SandboxViolationError(`Path escapes workspace: ${inputPath}`);
     return resolved;
   }
 }
@@ -108,6 +116,10 @@ export function isDeniedPath(relPath: string, profile: SandboxProfile = "default
 }
 
 function isSensitivePath(relPath: string): boolean {
+  // The snapshot/undo trash (§9.6) must be untouchable by the model — otherwise a
+  // runaway agent could wipe its own safety net. Deny only the trash, not the rest
+  // of .grok-code (skills/config are legitimately readable/writable).
+  if (relPath === ".grok-code/.trash" || relPath.startsWith(".grok-code/.trash/")) return true;
   const segments = relPath.split("/");
   if (segments.some((segment) => segment === ".git" || segment === "node_modules" || segment === "secrets" || segment === "credentials")) return true;
   if (segments.some((segment) => isDeniedEnvSegment(segment))) return true;
@@ -166,7 +178,7 @@ function isInside(child: string, parent: string): boolean {
 function assertNoSymlinkPathComponents(absPath: string, root: string, inputPath: string): void {
   const relative = path.relative(root, absPath);
   if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Path escapes workspace: ${inputPath}`);
+    throw new SandboxViolationError(`Path escapes workspace: ${inputPath}`);
   }
 
   let current = root;
@@ -174,7 +186,7 @@ function assertNoSymlinkPathComponents(absPath: string, root: string, inputPath:
     current = path.join(current, segment);
     if (!fs.existsSync(current)) return;
     if (fs.lstatSync(current).isSymbolicLink()) {
-      throw new Error(`Path contains symlink denied by sandbox: ${inputPath}`);
+      throw new SandboxViolationError(`Path contains symlink denied by sandbox: ${inputPath}`);
     }
   }
 }

@@ -1,6 +1,5 @@
-import type OpenAI from "openai";
 import type { GrokCodeConfig } from "../config/loadConfig.js";
-import { parseResponse } from "../api/responseParser.js";
+import type { LLMProvider } from "../api/LLMProvider.js";
 import type { EvidenceBundle, VerifierVerdict, UnsupportedAssumption } from "./EvidenceBundle.js";
 
 const VERIFIER_PROMPT = `You are an independent verifier for a coding agent. You did not participate in the previous work.
@@ -38,26 +37,29 @@ Use "pass" only when all material claims in the executor's final answer are trac
 Use "needs_more_evidence" when key claims are unverified but the task might still be completable.
 Use "fail" when the evidence actively contradicts the executor's claim or critical steps were skipped.`;
 
+/**
+ * Independent verifier quality gate (§7.3). Constructed once with a provider and
+ * reused — never re-instantiated inside the loop's hot path.
+ */
 export class VerifierAgent {
   constructor(
-    private readonly client: OpenAI,
-    private readonly config: GrokCodeConfig
+    private readonly provider: LLMProvider,
+    private readonly _config: GrokCodeConfig
   ) {}
 
   async verify(bundle: EvidenceBundle): Promise<VerifierVerdict> {
     const input = buildVerifierInput(bundle);
-    let response: any;
     try {
-      response = await (this.client as any).responses.create({
-        model: this.config.model,
-        input: [{ role: "user", content: input }],
-        parallel_tool_calls: false
+      const result = await this.provider.complete({
+        messages: [{ role: "user", content: input }],
+        tools: [],
+        toolChoice: "none",
+        parallelToolCalls: false
       });
+      return parseVerifierVerdict(result.text);
     } catch (error) {
       return fallbackVerdict(`Verifier API call failed: ${formatApiError(error)}`);
     }
-    const parsed = parseResponse(response);
-    return parseVerifierVerdict(parsed.finalText);
   }
 }
 

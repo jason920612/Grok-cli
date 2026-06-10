@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { applyPatchTool } from "../dist/tools/definitions/applyPatch.js";
 import { listFilesTool } from "../dist/tools/definitions/listFiles.js";
-import { runShellTool } from "../dist/tools/definitions/runShell.js";
+import { runPythonTool } from "../dist/tools/definitions/runPython.js";
 import { ApprovalPolicy } from "../dist/approval/ApprovalPolicy.js";
 import { ContextManager } from "../dist/context/ContextManager.js";
 import { WorkspaceSandbox } from "../dist/workspace/WorkspaceSandbox.js";
@@ -46,40 +47,52 @@ test("apply_patch removes files for delete patches", async () => {
   assert.equal(fs.existsSync(target), false);
 });
 
-test("run_shell allows newly generated output directories for the session", async () => {
+const PY_AVAILABLE = (() => {
+  try {
+    execFileSync(process.platform === "win32" ? "python" : "python3", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+test("run_python allows newly generated output directories for the session", async (t) => {
+  if (!PY_AVAILABLE) return t.skip("python not available");
   const root = makeWorkspace();
-  const tool = runShellTool(new ToolSkillRegistry(root));
+  const tool = runPythonTool(new ToolSkillRegistry(root));
   const ctx = makeContext(root);
 
   await tool.execute({
-    command: "node -e \"const fs=require('fs');fs.mkdirSync('coverage',{recursive:true});fs.writeFileSync('coverage/report.txt','ok')\"",
+    code: "import os\nos.makedirs('coverage', exist_ok=True)\nopen(os.path.join('coverage','report.txt'),'w').write('ok')",
     reason: "create a generated test report"
   }, ctx);
 
   assert.equal(path.basename(ctx.sandbox.assertReadableFile("coverage/report.txt")), "report.txt");
 });
 
-test("run_shell allows newly generated nested output directories for the session", async () => {
+test("run_python allows newly generated nested output directories for the session", async (t) => {
+  if (!PY_AVAILABLE) return t.skip("python not available");
   const root = makeWorkspace();
-  const tool = runShellTool(new ToolSkillRegistry(root));
+  const tool = runPythonTool(new ToolSkillRegistry(root));
   const ctx = makeContext(root);
 
   await tool.execute({
-    command: "node -e \"const fs=require('fs');fs.mkdirSync('packages/api/dist',{recursive:true});fs.writeFileSync('packages/api/dist/report.txt','ok')\"",
+    code: "import os\nos.makedirs(os.path.join('packages','api','dist'), exist_ok=True)\nopen(os.path.join('packages','api','dist','report.txt'),'w').write('ok')",
     reason: "create a nested generated report"
   }, ctx);
 
   assert.equal(path.basename(ctx.sandbox.assertReadableFile("packages/api/dist/report.txt")), "report.txt");
 });
 
-test("list_files shows generated outputs allowed for the current session", async () => {
+test("list_files shows generated outputs allowed for the current session", async (t) => {
+  if (!PY_AVAILABLE) return t.skip("python not available");
   const root = makeWorkspace();
-  const runShell = runShellTool(new ToolSkillRegistry(root));
+  const runPython = runPythonTool(new ToolSkillRegistry(root));
   const listFiles = listFilesTool(new ToolSkillRegistry(root));
   const ctx = makeContext(root);
 
-  await runShell.execute({
-    command: "node -e \"const fs=require('fs');fs.mkdirSync('coverage',{recursive:true});fs.writeFileSync('coverage/report.txt','ok')\"",
+  await runPython.execute({
+    code: "import os\nos.makedirs('coverage', exist_ok=True)\nopen(os.path.join('coverage','report.txt'),'w').write('ok')",
     reason: "create a generated test report"
   }, ctx);
 

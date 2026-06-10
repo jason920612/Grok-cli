@@ -1,53 +1,52 @@
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
+import { z } from "zod";
 
 export type ApprovalMode = "on-request" | "auto-local" | "auto-safe" | "auto-all" | "never";
 export type ToolChoice = "auto" | "required" | "none";
 export type SandboxProfile = "default" | "build" | "test" | "debug" | "package" | "docs";
+/** Retained for backward-compat config files; the loop is pure-stateless and ignores it. */
 export type ConversationMode = "stateful" | "stateless" | "hybrid";
 
-export type GrokCodeConfig = {
-  model: string;
-  approval: ApprovalMode;
-  toolChoice: ToolChoice;
-  maxSteps: number;
-  serverTools: boolean;
-  enableWebSearch: boolean;
-  enableXSearch: boolean;
-  workspaceRoot: string;
-  sandboxProfile: SandboxProfile;
-  workspaceTrusted: boolean;
-  conversationMode: ConversationMode;
-  hybridResetAfterTurns: number;
-  hybridResetAfterFailures: number;
-  enableVerifier: boolean;
-  verifierMaxRetries: number;
-};
+export const GrokCodeConfigSchema = z.object({
+  model: z.string().default("grok-4.3"),
+  approval: z.enum(["on-request", "auto-local", "auto-safe", "auto-all", "never"]).default("on-request"),
+  toolChoice: z.enum(["auto", "required", "none"]).default("auto"),
+  maxSteps: z.number().int().positive().default(50),
+  serverTools: z.boolean().default(true),
+  enableWebSearch: z.boolean().default(true),
+  enableXSearch: z.boolean().default(true),
+  workspaceRoot: z.string(),
+  sandboxProfile: z.enum(["default", "build", "test", "debug", "package", "docs"]).default("default"),
+  workspaceTrusted: z.boolean().default(false),
+  conversationMode: z.enum(["stateful", "stateless", "hybrid"]).default("stateless"),
+  hybridResetAfterTurns: z.number().int().positive().default(10),
+  hybridResetAfterFailures: z.number().int().positive().default(3),
+  enableVerifier: z.boolean().default(false),
+  verifierMaxRetries: z.number().int().nonnegative().default(2),
+  enableLlmSummary: z.boolean().default(false)
+});
+
+export type GrokCodeConfig = z.infer<typeof GrokCodeConfigSchema>;
 
 export function loadConfig(cwd = process.cwd(), overrides: Partial<GrokCodeConfig> = {}): GrokCodeConfig {
   dotenv.config({ path: path.join(cwd, ".env"), override: true });
   const projectConfig = readProjectConfig(cwd);
   const cleanOverrides = withoutUndefined(overrides);
-  return {
-    model: "grok-4.3",
-    approval: "on-request",
-    toolChoice: "auto",
-    maxSteps: 50,
-    serverTools: true,
-    enableWebSearch: true,
-    enableXSearch: true,
-    workspaceRoot: cwd,
-    sandboxProfile: "default",
-    workspaceTrusted: false,
-    conversationMode: "stateless",
-    hybridResetAfterTurns: 10,
-    hybridResetAfterFailures: 3,
-    enableVerifier: false,
-    verifierMaxRetries: 2,
-    ...projectConfig,
-    ...cleanOverrides
-  };
+  try {
+    return GrokCodeConfigSchema.parse({
+      workspaceRoot: cwd,
+      ...projectConfig,
+      ...cleanOverrides
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const details = error.issues.map((issue) => `  ${issue.path.join(".") || "(root)"}: ${issue.message}`).join("\n");
+      throw new Error(`Invalid configuration:\n${details}`);
+    }
+    throw error;
+  }
 }
 
 function withoutUndefined<T extends object>(value: T): Partial<T> {

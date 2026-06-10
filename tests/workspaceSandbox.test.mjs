@@ -3,7 +3,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { WorkspaceSandbox, isDeniedPath } from "../dist/workspace/WorkspaceSandbox.js";
+import { WorkspaceSandbox, isDeniedPath, SandboxViolationError } from "../dist/workspace/WorkspaceSandbox.js";
+
+test("sandbox violations throw the unified SandboxViolationError type", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "grok-sandbox-err-"));
+  fs.writeFileSync(path.join(base, ".env"), "SECRET=1");
+  const sandbox = new WorkspaceSandbox(base);
+  assert.throws(() => sandbox.assertReadableFile(".env"), (e) => {
+    assert.ok(e instanceof SandboxViolationError);
+    assert.match(e.message, /sensitive-path-denied/);
+    return true;
+  });
+});
 
 test("readable files must resolve inside the workspace", (t) => {
   const { root, outside } = makeWorkspace();
@@ -125,6 +136,19 @@ test("writable patch paths allow new directories inside the workspace", () => {
   const sandbox = new WorkspaceSandbox(root);
   const abs = sandbox.assertWritablePatchPath("new-dir/nested/file.ts");
   assert.equal(abs, path.join(root, "new-dir", "nested", "file.ts"));
+});
+
+test("snapshot trash is denied so the model cannot tamper with backups", () => {
+  const { root } = makeWorkspace();
+  fs.mkdirSync(path.join(root, ".grok-code", ".trash", "blobs"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".grok-code", ".trash", "manifest.json"), "{}");
+
+  const sandbox = new WorkspaceSandbox(root);
+  assert.equal(isDeniedPath(".grok-code/.trash/manifest.json"), true);
+  assert.equal(isDeniedPath(".grok-code/.trash"), true);
+  // the rest of .grok-code stays usable (skills/config)
+  assert.equal(isDeniedPath(".grok-code/config.json"), false);
+  assert.throws(() => sandbox.assertReadableFile(".grok-code/.trash/manifest.json"), /sensitive-path-denied/);
 });
 
 function makeWorkspace() {

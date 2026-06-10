@@ -21,7 +21,7 @@ Tool rules:
 - Do not read entire large files by default.
 - Use apply_patch for all file modifications.
 - Use create_skill only for creating or updating project-local skill markdown under .grok-code/skills.
-- Use run_shell for bounded foreground commands.
+- Use run_python for foreground commands and scripts (cross-platform). Invoke external programs (git, npm, tsc) via subprocess, e.g. subprocess.run(["git","status"]). Do not write files directly from Python — use apply_patch so edits are read-checked and reversible.
 - Use start_background_command only for long-running commands.
 - Track every background command by id.
 - Once a background command has served its purpose, stop it.

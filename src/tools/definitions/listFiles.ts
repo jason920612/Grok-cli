@@ -20,6 +20,7 @@ export function listFilesTool(skills: ToolSkillRegistry) {
         .map((entry) => (base === "." ? entry : `${base.replace(/\\/g, "/")}/${entry}`))
         .filter((entry) => !ctx.sandbox.isPathDenied(entry, "read"))
         .slice(0, args.maxResults ?? 200);
+      ctx.engine?.recordExistence(files);
       ctx.context.add({ type: "search_result", content: `list_files ${base} ${pattern}\n${files.join("\n")}`, priority: 45, expiresAfterSteps: 3 });
       return { files, truncated: entries.length > files.length };
     }

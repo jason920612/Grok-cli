@@ -26,17 +26,32 @@ export function applyPatchTool(skills: ToolSkillRegistry) {
       for (const filePatch of parsed) {
         const target = cleanPatchPath(filePatch.newFileName && filePatch.newFileName !== "/dev/null" ? filePatch.newFileName : filePatch.oldFileName);
         if (!target) throw new Error("Patch file path missing.");
+        const operation: "create" | "modify" | "delete" =
+          filePatch.oldFileName === "/dev/null" ? "create" : filePatch.newFileName === "/dev/null" ? "delete" : "modify";
         const abs = ctx.sandbox.assertWritablePatchPath(target);
-        const oldContent = filePatch.oldFileName === "/dev/null" ? "" : await fs.readFile(abs, "utf8").catch(() => "");
+
+        // read-before-write (§9.5): proportional to the operation's failure mode.
+        enforceReadBeforeWrite(ctx, target, operation, filePatch);
+
+        const oldContent = operation === "create" ? "" : await fs.readFile(abs, "utf8").catch(() => "");
         const next = applyOnePatch(oldContent, filePatch);
         if (next === false) throw new Error(`Patch failed for ${target}`);
-        if (filePatch.newFileName === "/dev/null") {
+
+        // snapshot pre-image to the undo net (§9.6) before the destructive write.
+        const round = ctx.round?.();
+        if (ctx.snapshots && round !== undefined) {
+          ctx.snapshots.snapshot(abs, target, operation === "modify" ? "overwrite" : operation, round);
+        }
+
+        if (operation === "delete") {
           await fs.unlink(abs);
+          ctx.engine?.invalidateReads(target);
           deleted.push(target);
           continue;
         }
         await fs.mkdir(path.dirname(abs), { recursive: true }).catch(() => undefined);
         await fs.writeFile(abs, next, "utf8");
+        ctx.engine?.invalidateReads(target);
         modified.push(target);
       }
       console.log(chalk.green("Applied patch:"));
@@ -62,6 +77,41 @@ function colorUnifiedDiff(patch: string): string {
     if (line.startsWith("diff ") || line.startsWith("index ")) return chalk.dim(line);
     return line;
   }).join("\n");
+}
+
+/**
+ * Enforce read-before-write (§9.5). Only active when an engine is wired
+ * (the real Agent); proportional to each operation's failure mode:
+ * modify needs the edited regions read & fresh; delete needs only existence
+ * evidence; create is exempt.
+ */
+function enforceReadBeforeWrite(
+  ctx: { engine?: import("../../context/ContextEngine.js").ContextEngine },
+  target: string,
+  operation: "create" | "modify" | "delete",
+  filePatch: ReturnType<typeof parsePatch>[number]
+): void {
+  if (!ctx.engine) return;
+  if (operation === "create") return;
+  if (operation === "delete") {
+    if (!ctx.engine.hasFileExistenceEvidence(target)) {
+      throw new Error(
+        `Refusing to delete ${target} without prior evidence it exists. List or inspect it first (list_files / get_file_overview).`
+      );
+    }
+    return;
+  }
+  const ranges = filePatch.hunks
+    .filter((hunk) => hunk.oldLines > 0)
+    .map((hunk) => ({ startLine: hunk.oldStart, endLine: hunk.oldStart + hunk.oldLines - 1 }));
+  const uncovered = ctx.engine.uncoveredForWrite(target, ranges);
+  if (uncovered.length > 0) {
+    const spans = uncovered.map((r) => `${r.startLine}-${r.endLine}`).join(", ");
+    throw new Error(
+      `Refusing to modify ${target}: lines ${spans} have not been read (or were changed since). ` +
+        `Read them with read_file_range before editing.`
+    );
+  }
 }
 
 function cleanPatchPath(fileName?: string): string | undefined {

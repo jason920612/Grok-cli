@@ -1,5 +1,5 @@
 import type { ApprovalMode } from "../config/loadConfig.js";
-import { classifyCommand, type CommandRisk } from "./RiskClassifier.js";
+import { classifyCommand, classifyPythonCode, type CommandRisk } from "./RiskClassifier.js";
 import { promptApproval } from "./promptApproval.js";
 
 export type PatchApprovalMetadata = {
@@ -59,6 +59,32 @@ export class ApprovalPolicy {
     if (decision.approved && decision.rememberSimilar) {
       this.rememberedApprovals.add(key);
     }
+    return {
+      approved: decision.approved,
+      risk,
+      message: decision.approved ? undefined : `User denied approval. Alternative requested: ${decision.guidance ?? "Use another approach."}`
+    };
+  }
+
+  async approveCode(code: string, reason: string): Promise<{ approved: boolean; risk: CommandRisk; message?: string }> {
+    const risk = classifyPythonCode(code);
+    const key = `python:${risk}`;
+    if (risk === "deny" || risk === "destructive") {
+      return { approved: false, risk, message: "Python code is denied by safety policy." };
+    }
+    if (this.rememberedApprovals.has(key)) return { approved: true, risk };
+    if (this.currentMode === "auto-all") return { approved: true, risk };
+    if (this.currentMode === "auto-local" && risk !== "global_environment_change") return { approved: true, risk };
+    if (this.currentMode === "auto-safe" && risk === "safe") return { approved: true, risk };
+    if (this.currentMode === "never") return { approved: false, risk, message: "Approval policy is never." };
+    if (risk === "safe") return { approved: true, risk };
+    const decision = await promptApproval(`run_python (${risk})`, reason, risk, {
+      operation: "run Python code",
+      policy: this.currentMode,
+      scope: "workspace Python execution",
+      rememberKey: key
+    });
+    if (decision.approved && decision.rememberSimilar) this.rememberedApprovals.add(key);
     return {
       approved: decision.approved,
       risk,

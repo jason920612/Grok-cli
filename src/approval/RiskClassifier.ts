@@ -22,6 +22,35 @@ export function classifyCommand(command: string, background = false): CommandRis
   return "ask";
 }
 
+/**
+ * Risk classification for `run_python` code (§9.4).
+ *
+ * Arbitrary Python can do anything, so this does not attempt to fully parse
+ * semantics — it scans for dangerous *capabilities* and escalates approval
+ * accordingly, mirroring the shell classifier's intent. Pure
+ * computation/read code stays "safe"; anything that shells out, deletes,
+ * installs, or networks is escalated.
+ */
+export function classifyPythonCode(code: string): CommandRisk {
+  const c = code.toLowerCase();
+  // Obvious recursive force-deletes embedded in subprocess/os.system strings.
+  if (/rm\s+-rf|shutil\.rmtree\s*\(\s*['"]\/?['"]?\s*\)|rmtree\s*\(\s*['"]\/['"]/.test(c)) return "deny";
+  if (/\bsudo\b/.test(c)) return "deny";
+  // Global environment changes: package installs.
+  if (/pip\s+install|pip3\s+install|npm\s+install\s+-g|conda\s+install|apt(-get)?\s+install|brew\s+install/.test(c)) {
+    return "global_environment_change";
+  }
+  // Networking (direct or via subprocess to curl/wget).
+  if (/\bimport\s+(requests|urllib|httpx|socket|http\.client|aiohttp)\b|from\s+urllib|requests\.(get|post)|urlopen\(|curl\s|wget\s/.test(c)) {
+    return "network";
+  }
+  // Effectful: shelling out, deleting, or writing files. Needs approval.
+  if (/subprocess\.|os\.system\(|os\.popen\(|os\.remove\(|os\.unlink\(|shutil\.(rmtree|move|copy)|\.unlink\(|open\s*\([^)]*['"][wa]\+?b?['"]/.test(c)) {
+    return "ask";
+  }
+  return "safe";
+}
+
 function isWindowsDestructiveDelete(command: string): boolean {
   return /\bremove-item\b/.test(command) && /\s-(recurse|r)\b/.test(command) && /\s-(force|f)\b/.test(command)
     || /\bdel(?:ete)?\b[\s\S]*(\/s\b[\s\S]*\/q\b|\/q\b[\s\S]*\/s\b)/.test(command)

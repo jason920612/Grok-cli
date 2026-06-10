@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { createXaiClient } from "./api/xaiClient.js";
+import { createXaiProvider } from "./api/XaiResponsesProvider.js";
 import { Agent } from "./agent/Agent.js";
 import { loadConfig, type ApprovalMode, type SandboxProfile, type ToolChoice, type ConversationMode } from "./config/loadConfig.js";
 import { startRepl } from "./ui/repl.js";
@@ -9,6 +9,8 @@ import { colorDiff } from "./ui/diffView.js";
 import { PROJECT_UNDERSTANDING_TASK } from "./agent/projectUnderstandingTask.js";
 import { ensureWorkspaceTrusted } from "./ui/workspaceTrust.js";
 import { WorkspaceTrustStore } from "./workspace/WorkspaceTrustStore.js";
+import { WorkspaceSnapshotStore } from "./workspace/WorkspaceSnapshotStore.js";
+import path from "node:path";
 
 type CliOpts = {
   model?: string;
@@ -50,6 +52,8 @@ export async function main(): Promise<void> {
   program.command("git-status").description("Show git status").action(async () => localGitStatus());
   program.command("diff").description("Show git diff").action(async () => localStatus("diff"));
   program.command("resume [sessionId]").description("Resume a session").action(async (sessionId?: string) => runResume(sessionId, program.opts<CliOpts>()));
+  program.command("trash").description("List recoverable file snapshots (undo net)").action(() => listTrash());
+  program.command("restore <id>").description("Restore a file snapshot by id").action((id: string) => restoreTrash(id));
 
   program.action(async (taskParts: string[], opts: CliOpts) => {
     const task = taskParts.join(" ").trim();
@@ -76,10 +80,9 @@ async function makeAgent(opts: CliOpts, task = "", cwd = process.cwd()): Promise
     conversationMode: parseConversationMode(opts.conversationMode),
     enableVerifier: opts.verifier === true ? true : undefined
   });
-  const client = createXaiClient();
-  const agent = new Agent(client, config, task);
+  const provider = createXaiProvider({ model: config.model });
   printHeader(config.model, config.workspaceRoot);
-  await agent.bootstrap();
+  const agent = await Agent.create(provider, config, task);
   activeSigintCleanup?.();
   const sigintHandler = async () => {
     await agent.background.stopAll("Ctrl+C cleanup");
@@ -170,6 +173,31 @@ async function runResume(sessionId: string | undefined, opts: CliOpts): Promise<
     }
   });
   await finalAgent.background.stopAll("resume exit cleanup");
+}
+
+function listTrash(): void {
+  const entries = new WorkspaceSnapshotStore(process.cwd()).list();
+  if (entries.length === 0) {
+    console.log("No snapshots. Destructive file operations are backed up here automatically.");
+    return;
+  }
+  console.log("Recoverable snapshots (most recent first):");
+  for (const e of entries) {
+    console.log(`  ${e.id}  ${e.op.padEnd(9)} ${e.path}  (round ${e.round}, ${e.bytes}B)`);
+  }
+  console.log("\nRestore with: grok-code restore <id>");
+}
+
+function restoreTrash(id: string): void {
+  const store = new WorkspaceSnapshotStore(process.cwd());
+  const entry = store.list().find((e) => e.id === id);
+  if (!entry) {
+    console.log(`No snapshot with id ${id}. Run 'grok-code trash' to list snapshots.`);
+    return;
+  }
+  const target = path.join(process.cwd(), entry.path);
+  if (store.restore(id, target)) console.log(`Restored ${entry.path} from snapshot ${id}.`);
+  else console.log(`Could not restore snapshot ${id}.`);
 }
 
 function localSessionStatus(opts: CliOpts): void {
