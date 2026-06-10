@@ -204,6 +204,21 @@ test("multiple tool calls are rejected and corrected before execution", async ()
   assert.match(lastInput(requests[1]), /exactly one tool call/);
 });
 
+test("repeated identical successful read-only call is blocked (no-progress)", async () => {
+  const { loop, toolCalls } = makeLoop({
+    responses: [
+      responseWithTool("r1", functionCall("list_files", { glob: "**/*.ts" }, "c1")),
+      responseWithTool("r2", functionCall("list_files", { glob: "**/*.ts" }, "c2")),
+      responseWithText("r3", "done")
+    ],
+    isReadOnly: (n) => n === "list_files",
+    execute: () => ({ ok: true, data: { files: ["a.ts"] }, summary: "1 file" })
+  });
+  const output = await loop.run("look around", true);
+  assert.equal(toolCalls.filter((c) => c.name === "list_files").length, 1, "identical re-list blocked");
+  assert.match(output, /repeated_failure_blocked/);
+});
+
 test("loop stops after maxSteps when the model never returns a final answer", async () => {
   const { loop, toolCalls } = makeLoop({
     config: { maxSteps: 2 },
@@ -283,7 +298,7 @@ test("verifier receives runtime memory facts with provenance", async () => {
     ]
   });
   await loop.run("does src/agent/Agent.ts export Agent?", true);
-  const verifierReq = requests.find((r) => r.parallelToolCalls === false);
+  const verifierReq = requests.find((r) => r.toolChoice === "none");
   const input = String(verifierReq.messages[0].content);
   assert.match(input, /<runtime_memory_facts>/);
   assert.match(input, /confidence=verified/);

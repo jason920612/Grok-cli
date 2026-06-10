@@ -17,9 +17,20 @@ export type FunctionOutput = { type: "function_call_output"; call_id: string; ou
 
 type FailureRecord = { count: number; lastError: string; lastArgs: string; toolName: string; progressVersion: number };
 
-/** Repeated-failure blocking + progress tracking (§7.4). Behaviour preserved from the old loop. */
+/**
+ * Repeated no-progress call blocking + progress tracking (§7.4).
+ *
+ * Blocks re-running an identical (tool, args) call when nothing has changed
+ * since it last ran — failures AND successes. Re-running an identical read-only
+ * inspection or a side-effect-free script yields the same result and only burns
+ * a step (a real task showed the model looping `inspect_environment` 13×). A
+ * genuine mutation calls `markProgress`, bumping the version so legitimate
+ * re-checks (e.g. `git_status` after an edit) are allowed again.
+ */
 export class FailureTracker {
   private map = new Map<string, FailureRecord>();
+  /** Successful no-progress calls, key -> progressVersion they last ran at. */
+  private seen = new Map<string, number>();
   private lastKey: string | undefined;
   private progressVersion = 0;
 
@@ -36,9 +47,16 @@ export class FailureTracker {
     this.lastKey = key;
   }
 
+  /** Record a successful call that made no progress (read-only / side-effect-free). */
+  recordNoProgress(toolName: string, args: string): void {
+    this.seen.set(normalizeFailureKey(toolName, args), this.progressVersion);
+  }
+
   isRepeated(toolName: string, args: string): boolean {
-    const rec = this.map.get(normalizeFailureKey(toolName, args));
-    return Boolean(rec && rec.count >= 1 && rec.progressVersion === this.progressVersion);
+    const key = normalizeFailureKey(toolName, args);
+    const rec = this.map.get(key);
+    if (rec && rec.count >= 1 && rec.progressVersion === this.progressVersion) return true;
+    return this.seen.get(key) === this.progressVersion;
   }
 
   lastFailure(): { toolName: string; args: string; error: string; attempts: number } | undefined {
@@ -63,6 +81,8 @@ export class ToolExecutor {
   readonly usedToolNames = new Set<string>();
   readonly summaries: ToolActionSummary[] = [];
   hasModifiedFiles = false;
+  /** Whether the most recent executed call made progress (a mutation). */
+  lastProgress = false;
 
   constructor(
     private readonly tools: ToolRegistry,
@@ -72,19 +92,23 @@ export class ToolExecutor {
 
   async executeOne(call: ProviderToolCall, step: number, signal?: AbortSignal): Promise<FunctionOutput> {
     throwIfAborted(signal);
+    this.lastProgress = false;
     this.usedToolNames.add(call.name);
     const rawArgs = call.argsJson || "{}";
 
     if (this.failureTracker.isRepeated(call.name, rawArgs)) {
       const prior = this.failureTracker.lastFailure();
+      const detail =
+        prior && prior.toolName === call.name && prior.args === rawArgs
+          ? ` (already failed ${prior.attempts} time(s), last error: ${prior.error})`
+          : " (already ran and produced the same result; nothing has changed since)";
       const result = {
         ok: false,
         error: {
           code: "repeated_failure_blocked",
           message:
-            `This exact call to ${call.name} with these arguments already failed` +
-            (prior ? ` (${prior.attempts} time(s), last error: ${prior.error})` : "") +
-            `. Choose a different approach: narrow the scope, inspect the root cause, or change strategy.`
+            `This exact call to ${call.name} with these arguments was already made without any intervening progress${detail}. ` +
+            `Reuse the earlier result, or take a different action: inspect something new, narrow the scope, edit a file, or proceed to the next step.`
         }
       };
       this.pushSummary(step, call, false, `${result.error.code}: ${result.error.message}`);
@@ -119,6 +143,11 @@ export class ToolExecutor {
       this.failureTracker.record(call.name, rawArgs, errorMsg);
     } else if (effects?.countsAsProgress) {
       this.failureTracker.markProgress();
+      this.lastProgress = true;
+    } else {
+      // Successful but no progress (read-only inspection / side-effect-free script):
+      // block an identical repeat until something actually changes.
+      this.failureTracker.recordNoProgress(call.name, rawArgs);
     }
 
     this.pushSummary(step, call, result.ok, summarizeToolResult(result));

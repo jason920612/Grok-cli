@@ -55,6 +55,8 @@ export type AgentTuning = {
   guard: {
     emptyResponseReprompts: number;
     planOnlyReprompts: number;
+    /** Nudge toward action after this many consecutive no-progress (inspection) steps. */
+    actionNudgeAfterNoProgress: number;
   };
   /** Inline truncation limits. */
   truncate: {
@@ -113,7 +115,8 @@ export const TUNING: AgentTuning = {
   },
   guard: {
     emptyResponseReprompts: 1,
-    planOnlyReprompts: 2
+    planOnlyReprompts: 2,
+    actionNudgeAfterNoProgress: 10
   },
   truncate: {
     toolOutputInlineChars: 4_000

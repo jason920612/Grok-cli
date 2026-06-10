@@ -61,6 +61,7 @@ export class AgentLoop {
     let lastVerifierFeedback: string | undefined;
     let lastVerifierVerdict: VerifierVerdict | undefined;
     let finalText = "";
+    let noProgressStreak = 0;
 
     while (state.advance()) {
       this.context.nextStep(task);
@@ -87,7 +88,9 @@ export class AgentLoop {
           messages: [{ role: "user", content: input }],
           tools: this.tools.schemas(serverTools(this.config)),
           toolChoice: this.config.toolChoice,
-          parallelToolCalls: true,
+          // Single-tool discipline (MultiToolGuard) — tell the API not to batch,
+          // otherwise the model emits parallel calls we reject, wasting a step each.
+          parallelToolCalls: false,
           signal
         });
       } finally {
@@ -164,6 +167,17 @@ export class AgentLoop {
       this.events.emit({ type: "tool_batch", step: state.step, message: formatToolBatch(state.step, response.toolCalls.map((c) => c.name)) });
       await executor.executeOne(response.toolCalls[0], state.step, signal);
       runtimeFeedback = undefined;
+
+      // Analysis-paralysis nudge: after a run of inspection with no mutation,
+      // push the model to stop gathering context and act.
+      noProgressStreak = executor.lastProgress ? 0 : noProgressStreak + 1;
+      if (noProgressStreak >= TUNING.guard.actionNudgeAfterNoProgress) {
+        runtimeFeedback =
+          `You have run ${noProgressStreak} inspection steps without changing anything. ` +
+          "Stop gathering context now. If the task requires an edit, read the exact target lines if you have not, then make the change with apply_patch this turn. " +
+          "If the task is already answerable, give the final answer. Do not run more searches or reads that repeat what you already know.";
+        noProgressStreak = 0;
+      }
     }
 
     const gate = await finalAnswerGate({
