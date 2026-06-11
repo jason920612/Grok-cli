@@ -112,6 +112,19 @@ test("/approval command changes the mode", async () => {
   });
 });
 
+test("reconnect with Last-Event-ID replays only missed events (no duplicate flood)", async () => {
+  await withServer(async ({ base, token }) => {
+    // Buffer has the demo "mode" event (seq 1). A reconnect past it replays nothing.
+    const res = await fetch(`${base}/api/events?t=${token}&lastEventId=999`);
+    const reader = res.body.getReader();
+    const read = reader.read();
+    const timed = await Promise.race([read, new Promise((r) => setTimeout(() => r({ value: undefined, done: false }), 400))]);
+    const text = timed.value ? new TextDecoder().decode(timed.value) : "";
+    assert.doesNotMatch(text, /"type":"mode"/, "already-seen events are not replayed");
+    await reader.cancel();
+  });
+});
+
 test("toggle flips always-approve to auto-all and back", async () => {
   await withServer(async ({ base, token, agent }) => {
     await fetch(`${base}/api/toggle?t=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ yes: true }) });

@@ -76,7 +76,8 @@ class WebEventSink implements AgentEventSink {
 export async function startWebServer(opts: WebServerOptions): Promise<WebServer> {
   let agent = opts.agent;
   const token = randomUUID().replace(/-/g, "");
-  const buffer: WebEvent[] = [...(opts.demoEvents ?? [])];
+  let seq = 0;
+  const buffer: Array<{ seq: number; ev: WebEvent }> = (opts.demoEvents ?? []).map((ev) => ({ seq: ++seq, ev }));
   const clients = new Set<http.ServerResponse>();
   const pending = new Map<string, (body: any) => void>();
 
@@ -86,11 +87,22 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
   let useAgents = opts.multiAgentDefault ?? true;
   let modeBeforeAuto: ApprovalMode = agent.approval.mode === "auto-all" ? "on-request" : agent.approval.mode;
 
+  const frame = (item: { seq: number; ev: WebEvent }) => `id: ${item.seq}\ndata: ${JSON.stringify(item.ev)}\n\n`;
   const emit = (ev: WebEvent): void => {
-    buffer.push(ev);
+    const item = { seq: ++seq, ev };
+    buffer.push(item);
     if (buffer.length > 2000) buffer.splice(0, buffer.length - 2000);
-    const data = `data: ${JSON.stringify(ev)}\n\n`;
-    for (const res of clients) res.write(data);
+    const data = frame(item);
+    // Write to each client independently: a stale/half-closed SSE connection must
+    // not throw and starve the live ones. Prune any client whose write fails.
+    for (const res of [...clients]) {
+      try {
+        if (!res.writableEnded) res.write(data);
+        else clients.delete(res);
+      } catch {
+        clients.delete(res);
+      }
+    }
   };
 
   const webPrompter: ApprovalPrompter = (command, reason, risk, details) =>
@@ -138,8 +150,14 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
   const runTask = async (text: string): Promise<void> => {
     if (opts.demoEvents) return; // demo mode: display only
     if (running) {
-      interjections?.push(text);
-      emit({ type: "chat", role: "system", text: `💬 queued for the agent: ${text}` });
+      if (pending.size > 0) {
+        // The agent is blocked waiting on a question/approval; an interjection
+        // won't be read until that's answered. Tell the user to use the card.
+        emit({ type: "chat", role: "system", text: "⚠ The agent is waiting for your answer above — please use the buttons in the highlighted card first." });
+      } else {
+        interjections?.push(text);
+        emit({ type: "chat", role: "system", text: `💬 queued for the agent: ${text}` });
+      }
       return;
     }
     running = true;
@@ -332,9 +350,14 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
 
     if (req.method === "GET" && url.pathname === "/api/events") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-      for (const ev of buffer) res.write(`data: ${JSON.stringify(ev)}\n\n`);
+      // On reconnect the browser sends Last-Event-ID; replay only what it missed
+      // (lossless) instead of the whole buffer (which would duplicate the convo).
+      const lastId = Number(url.searchParams.get("lastEventId") ?? req.headers["last-event-id"] ?? 0) || 0;
+      for (const item of buffer) if (item.seq > lastId) res.write(frame(item));
       clients.add(res);
-      const heartbeat = setInterval(() => res.write(":hb\n\n"), 25_000);
+      const heartbeat = setInterval(() => {
+        try { res.write(":hb\n\n"); } catch { /* pruned on next emit */ }
+      }, 25_000);
       req.on("close", () => {
         clearInterval(heartbeat);
         clients.delete(res);
