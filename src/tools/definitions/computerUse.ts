@@ -53,6 +53,22 @@ const requireWindows = () => {
   if (process.platform !== "win32") throw new Error("Desktop computer-use is only available on Windows.");
 };
 
+export function listWindowsTool(skills: ToolSkillRegistry) {
+  return makeTool(
+    "list_windows",
+    "List the open top-level desktop windows (title + position/size). Call this FIRST when doing desktop automation so you know what windows exist and their exact titles to pass to capture_window / click_desktop.",
+    schemas.object({}, []),
+    z.object({}),
+    skills,
+    async () => {
+      requireWindows();
+      const r = runPs(winScript("list.ps1"), []);
+      const windows = Array.isArray(r) ? r : [];
+      return { count: windows.length, windows };
+    }
+  );
+}
+
 export function captureWindowTool(skills: ToolSkillRegistry) {
   return makeTool(
     "capture_window",

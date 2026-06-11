@@ -18,7 +18,7 @@ import { runPythonTool } from "./runPython.js";
 import { updatePlanTool } from "./updatePlan.js";
 import { viewImageTool } from "./viewImage.js";
 import { screenshotTool } from "./screenshot.js";
-import { captureWindowTool, clickDesktopTool } from "./computerUse.js";
+import { listWindowsTool, captureWindowTool, clickDesktopTool } from "./computerUse.js";
 import { rememberTool, forgetTool } from "./projectMemory.js";
 import { noteUserLevelTool } from "./userProfile.js";
 import { askUserTool } from "./askUser.js";
@@ -50,6 +50,7 @@ export const LOCAL_TOOL_NAMES = [
   "update_plan",
   "view_image",
   "screenshot",
+  "list_windows",
   "capture_window",
   "click_desktop",
   "apply_patch",
@@ -86,6 +87,7 @@ export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry
     updatePlanTool(skills),
     viewImageTool(skills),
     screenshotTool(skills),
+    listWindowsTool(skills),
     captureWindowTool(skills),
     clickDesktopTool(skills),
     applyPatchTool(skills),
