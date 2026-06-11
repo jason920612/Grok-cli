@@ -91,6 +91,19 @@ test("orchestrator delegates to a worker which edits in a worktree, opens a PR, 
   assert.match(merged, /hello feature/);
 });
 
+test("orchestrator has no file-editing/shell tools — a direct apply_patch is rejected and writes nothing", async () => {
+  const root = gitRepo();
+  const provider = scriptedProvider([
+    // The orchestrator (wrongly) tries to edit a file itself.
+    fnCall("apply_patch", { patch: "*** Begin Patch\n*** Add File: sneaky.txt\n+nope\n*** End Patch", reason: "try direct edit" }),
+    text("Cannot edit directly; would delegate instead.")
+  ]);
+  const orch = new Orchestrator(provider, config(root), "noedit-run", "edit a file");
+  await orch.run("Create sneaky.txt directly.");
+  // apply_patch is stripped from the orchestrator, so nothing was written.
+  assert.equal(fs.existsSync(path.join(root, "sneaky.txt")), false);
+});
+
 function routedProvider(queues) {
   const q = Object.fromEntries(Object.entries(queues).map(([k, v]) => [k, [...v]]));
   return {

@@ -10,6 +10,7 @@ import { ApprovalPolicy } from "../approval/ApprovalPolicy.js";
 import { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import { SkillLoader } from "../skills/SkillLoader.js";
 import { LOCAL_TOOL_NAMES, createLocalToolRegistry } from "../tools/definitions/index.js";
+import { TOOL_EFFECTS } from "../tools/toolEffects.js";
 import type { AgentTool, ToolExecutionContext, SpawnWorker } from "../tools/AgentTool.js";
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { scanRepo } from "../workspace/RepoScanner.js";
@@ -33,8 +34,9 @@ import {
 } from "../tools/definitions/collaboration.js";
 
 const ORCHESTRATOR_ROLE = `You are the ORCHESTRATOR of a team of sub-agents.
+You have NO file-editing or shell tools (no apply_patch, no run_python) — you literally cannot modify the repo or run commands. Only your worker sub-agents can change files. So never try to write files yourself; if a change is needed, delegate it.
 If the task is just a QUESTION or analysis that needs NO file changes, answer it DIRECTLY using your read tools (read_file_range, search_text, get_file_overview, git_status/diff) — do NOT open issues or spawn workers for that.
-For any task that CHANGES files, you do NOT edit files yourself — you delegate. Process:
+For any task that CHANGES files, you delegate. Process:
 1. Decompose the task into independent sub-tasks. Prefer sub-tasks on NON-OVERLAPPING files to avoid merge conflicts.
 2. Open an issue per sub-task. To execute, prefer spawn_agents to launch several workers IN PARALLEL when their sub-tasks touch non-overlapping files; use spawn_agent for a single worker. Give each a focused role and a precise brief. Workers run in isolated git worktrees and open a PR when done.
 3. When a worker's PR is open, review_pr it; if good, merge_pr. On a merge conflict, the merge is aborted and conflicts reported — reassign or serialize the conflicting work.
@@ -181,9 +183,20 @@ export class Orchestrator {
     const context = new ContextManager();
     const engine = new ContextEngine();
     const snapshots = new WorkspaceSnapshotStore(opts.root);
+    // The orchestrator plans and delegates — it must not change the repo or run
+    // shell commands itself, so workers are the only agents that touch files.
+    // Strip every workspace-mutating / shell tool from its registry (derived
+    // from TOOL_EFFECTS so new tools are classified automatically).
+    const mutating = (name: string) => TOOL_EFFECTS[name]?.modifiesWorkspace || TOOL_EFFECTS[name]?.isShell;
+    const allowedNames = opts.isOrchestrator ? LOCAL_TOOL_NAMES.filter((n) => !mutating(n)) : LOCAL_TOOL_NAMES;
     const toolSkills = new ToolSkillRegistry(opts.root);
-    toolSkills.loadBuiltin(LOCAL_TOOL_NAMES);
-    const tools: ToolRegistry = createLocalToolRegistry(toolSkills);
+    toolSkills.loadBuiltin(allowedNames);
+    const fullTools = createLocalToolRegistry(toolSkills);
+    const tools = new ToolRegistry();
+    for (const tool of fullTools.list()) {
+      if (opts.isOrchestrator && mutating(tool.name)) continue;
+      tools.register(tool);
+    }
     for (const tool of opts.extraTools(toolSkills)) tools.register(tool);
     const skillLoader = new SkillLoader(opts.root);
 
