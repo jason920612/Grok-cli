@@ -43,7 +43,7 @@ test("readOnly classification matches the historical read-only set exactly", () 
 
 test("shell-like tools (exit-code semantics) are the shell + python executors", () => {
   const shellTools = LOCAL_TOOL_NAMES.filter((name) => TOOL_EFFECTS[name].isShell);
-  assert.deepEqual(shellTools.sort(), ["run_python", "screenshot", "start_background_command"].sort());
+  assert.deepEqual(shellTools.sort(), ["click_desktop", "run_python", "screenshot", "start_background_command"].sort());
 });
 
 test("only apply_patch is marked as modifying the workspace", () => {

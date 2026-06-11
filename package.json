@@ -10,7 +10,8 @@
     "dist",
     "src/skills/builtin",
     "src/tool-skills/builtin",
-    "src/web/public"
+    "src/web/public",
+    "src/tools/win"
   ],
   "scripts": {
     "build": "tsc",
