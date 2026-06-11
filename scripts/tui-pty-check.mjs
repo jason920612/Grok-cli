@@ -107,14 +107,32 @@ async function main() {
   term.write("/yes\r");
   await waitFor(/Always-approve.*ON/, 8000, "/yes toggle");
 
-  // 7. Exit promptly — no hang.
+  // 7. Task path: a task goes through runWithEscInterrupt. Start one, abort it
+  // with Esc, then confirm the NEXT line still takes a SINGLE Enter — this is the
+  // regression where the post-task prompt swallowed the first Enter.
+  await sleep(300);
+  term.write("/agents off\r");
+  await waitFor(/Multi-agent mode.*OFF/, 8000, "/agents off");
+  await sleep(200);
+  term.write("hello there\r"); // a task → runWithEscInterrupt (errors fast on the dummy key)
+  await waitFor(/Error:/, 15000, "task ends with an error");
+  await sleep(500);
+  term.write("/status\r"); // SINGLE Enter — must be accepted (and keep the leading '/')
+  await waitFor(/tokens this session/, 8000, "single-Enter AFTER a task");
+
+  // Probe: a SECOND read after the task — does the reader stay alive?
+  await sleep(400);
+  term.write("/help\r");
+  await waitFor(/Exit interactive mode/, 8000, "2nd post-task read (/help)");
+
+  // 8. Exit promptly — no hang.
   await sleep(300);
   term.write("/exit\r");
   const e = await waitExit(6000);
 
   const ok = clean().includes("Goodbye.");
   console.log("\n\n================ RESULT ================");
-  console.log(`single-Enter per line : PASS (3 lines accepted with one CR each)`);
+  console.log(`single-Enter per line : PASS (incl. the line right after a task)`);
   console.log(`prompt exit code      : ${e.exitCode}`);
   console.log(`printed "Goodbye."    : ${ok ? "yes" : "no"}`);
   console.log(`no hang after /exit   : PASS (exited within 6s)`);
@@ -124,6 +142,7 @@ async function main() {
 
 main().catch((err) => {
   console.error("\n\nPTY CHECK FAILED:\n" + err.message);
+  console.error("\n--- cleaned transcript tail ---\n" + clean().slice(-1200));
   try {
     term.kill();
   } catch {}

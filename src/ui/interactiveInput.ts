@@ -79,9 +79,9 @@ export class ReplInput {
   }
 
   /**
-   * Run a long task while watching for Esc to abort it. The persistent reader is
-   * parked; stdin is put in raw mode just to catch Esc, then parked again so the
-   * next readLine starts clean.
+   * Run a long task while watching for Esc to abort it (and optionally capturing
+   * typed interjection lines). The line reader is torn down for the duration so
+   * it can't process keystrokes; the next readLine() builds a fresh interface.
    */
   async runWithEscInterrupt<T>(
     work: (signal: AbortSignal) => Promise<T>,
@@ -89,6 +89,15 @@ export class ReplInput {
   ): Promise<T> {
     if (this.fallback) return work(new AbortController().signal);
     const controller = new AbortController();
+    // Fully tear down the line reader for the duration of the task. If it merely
+    // stayed paused, readline would keep processing keystrokes (we resume stdin
+    // here for Esc/interject) and leave its line state dirty, so the next prompt
+    // swallows its first Enter. With no interface alive, only our raw handler
+    // reads stdin; the next readLine() builds a fresh, clean interface.
+    if (this.rl) {
+      this.rl.close();
+      this.rl = null;
+    }
     readline.emitKeypressEvents(process.stdin);
     try {
       process.stdin.setRawMode(true);
@@ -175,8 +184,14 @@ export class ReplInput {
         /* not all TTYs support raw mode */
       }
     }
+    // Remove both the keypress consumers AND the 'data' keypress decoder that
+    // emitKeypressEvents installs (a 'data' listener keeps the stream flowing /
+    // the event loop alive). unref() is the belt-and-suspenders guarantee that a
+    // lingering stdin handle never blocks process exit.
     process.stdin.removeAllListeners("keypress");
+    process.stdin.removeAllListeners("data");
     process.stdin.pause();
+    process.stdin.unref?.();
   }
 }
 

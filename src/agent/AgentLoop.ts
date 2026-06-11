@@ -99,7 +99,9 @@ export class AgentLoop {
       // Labeled (multi-agent) loops skip the live spinner — concurrent workers
       // would corrupt each other's spinner on a shared TTY; their progress shows
       // as prefixed event lines instead.
-      const spinner = this.label ? null : ora(`Grok thinking (step ${state.step})`).start();
+      // discardStdin:false — the REPL owns stdin (raw mode, interjection); ora's
+      // default stdin grab leaves a lingering handle that hangs process exit.
+      const spinner = this.label ? null : ora({ text: `Grok thinking (step ${state.step})`, discardStdin: false }).start();
       let response;
       try {
         response = await this.provider.complete({
