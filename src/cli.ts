@@ -212,6 +212,9 @@ async function runInteractive(opts: CliOpts): Promise<void> {
   }
   const agent = await makeAgent(opts, "interactive session");
   const finalAgent = await startRepl(agent, {
+    // Multi-agent is the default in interactive mode too (parity with one-shot);
+    // --no-agents opts out. Toggle live with /agents.
+    multiAgentDefault: opts.agents !== false && isGitAvailable(),
     switchWorkspace: async (workspace) => {
       const next = await makeAgent(opts, "interactive session", workspace);
       process.chdir(workspace);

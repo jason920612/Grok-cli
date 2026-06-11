@@ -196,10 +196,15 @@ export class AgentLoop {
       toolCtx: this.toolCtx,
       hasModifiedFiles: executor.hasModifiedFiles
     });
-    const diffSection = gate.diffPreview ? `\n\n[Diff preview]\n${gate.diffPreview}` : "";
+    // One-shot (CLI) keeps the full machine-readable tail: action log, inline
+    // diff preview, final checks. Interactive mode omits all of it — the REPL
+    // shows a compact changed-files summary and the clickable /diff browser
+    // instead, so the conversation stays clean.
     const actionSection =
-      executor.summaries.length > 0 ? `\n\n[Actions completed]\n${formatActionSummary(executor.summaries)}` : "";
-    const suffix = `${actionSection}${diffSection}\n\n[Final checks]\nBackground: ${gate.backgroundStatus}\nDiff checked: ${gate.diffChecked ? "yes" : "not needed"}`;
+      oneShot && executor.summaries.length > 0 ? `\n\n[Actions completed]\n${formatActionSummary(executor.summaries)}` : "";
+    const diffSection = oneShot && gate.diffPreview ? `\n\n[Diff preview]\n${gate.diffPreview}` : "";
+    const checks = oneShot ? `\n\n[Final checks]\nBackground: ${gate.backgroundStatus}\nDiff checked: ${gate.diffChecked ? "yes" : "not needed"}` : "";
+    const suffix = `${actionSection}${diffSection}${checks}`;
     return finalText ? `${finalText}${suffix}` : `Stopped after max steps without a final model message.${suffix}`;
   }
 
