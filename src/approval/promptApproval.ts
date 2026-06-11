@@ -1,6 +1,7 @@
-import { input, select } from "@inquirer/prompts";
+import { input } from "@inquirer/prompts";
 import chalk from "chalk";
 import type { CommandRisk } from "./RiskClassifier.js";
+import { mouseSelect } from "../ui/mouseSelect.js";
 
 export type ApprovalPromptDetails = {
   operation?: string;
@@ -28,26 +29,23 @@ export async function promptApproval(command: string, reason: string, risk: Comm
       guidance: "Approval requires an interactive terminal. Use a safer approach or rerun in interactive mode."
     };
   }
-  const choice = await select({
-    message: "Approve this operation?",
-    choices: [
-      {
-        name: "Yes, allow this time",
-        value: "allow_once",
-        description: "Approve only this exact operation."
-      },
-      {
-        name: "Yes, and remember similar",
-        value: "allow_similar",
-        description: "Approve now and auto-approve the displayed operation type in this session."
-      },
-      {
-        name: "No, tell the model what to do instead",
-        value: "deny_with_guidance",
-        description: "Deny this request and tell the model what to try instead."
-      }
-    ]
-  });
+  const choice = await mouseSelect("Approve this operation? (click or arrows + Enter)", [
+    {
+      name: "Yes, allow this time",
+      value: "allow_once",
+      description: "Approve only this exact operation."
+    },
+    {
+      name: "Yes, and remember similar",
+      value: "allow_similar",
+      description: "Approve now and auto-approve the displayed operation type in this session."
+    },
+    {
+      name: "No, tell the model what to do instead",
+      value: "deny_with_guidance",
+      description: "Deny this request and tell the model what to try instead."
+    }
+  ]);
   if (choice === "allow_once") return { approved: true, rememberSimilar: false };
   if (choice === "allow_similar") return { approved: true, rememberSimilar: true };
   const guidance = await input({

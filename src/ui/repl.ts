@@ -6,6 +6,7 @@ import { Orchestrator } from "../agents/Orchestrator.js";
 import { formatTotals } from "../agent/SessionUsage.js";
 import { Interjections } from "../agent/Interjections.js";
 import { collectWorkingTreeDiff, runDiffBrowser, summarizeChanges } from "./diffBrowser.js";
+import { mouseSelect } from "./mouseSelect.js";
 import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
 import { ReplInput, type TranscriptEntry } from "./interactiveInput.js";
@@ -24,14 +25,17 @@ function attachAskUser(agent: Agent): void {
   agent.askUser = async (questions) => {
     const answers: Array<{ question: string; answer: string }> = [];
     for (const q of questions) {
-      console.log(chalk.cyan(q.question));
-      const answer =
-        q.options && q.options.length > 0
-          ? await select({ message: "Choose:", choices: [...q.options.map((o) => ({ name: o, value: o })), { name: "Other (type my own)", value: "__other__" }] }).then((v) =>
-              v === "__other__" ? input({ message: "Your answer:" }) : v
-            )
-          : await input({ message: "Your answer:" });
-      answers.push({ question: q.question, answer });
+      if (q.options && q.options.length > 0) {
+        const picked = await mouseSelect(q.question, [
+          ...q.options.map((o) => ({ name: o, value: o })),
+          { name: "Other (type my own)", value: "__other__" }
+        ]);
+        const answer = picked === null || picked === "__other__" ? await input({ message: "Your answer:" }) : picked;
+        answers.push({ question: q.question, answer });
+      } else {
+        console.log(chalk.cyan(q.question));
+        answers.push({ question: q.question, answer: await input({ message: "Your answer:" }) });
+      }
     }
     return answers;
   };
