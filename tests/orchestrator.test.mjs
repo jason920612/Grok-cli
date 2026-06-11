@@ -104,6 +104,24 @@ test("orchestrator has no file-editing/shell tools — a direct apply_patch is r
   assert.equal(fs.existsSync(path.join(root, "sneaky.txt")), false);
 });
 
+test("orchestrator's ask_user reaches the interactive askUser hook", async () => {
+  const root = gitRepo();
+  let asked = null;
+  const provider = scriptedProvider([
+    fnCall("ask_user", { questions: [{ question: "Which framework?", options: ["React", "Vue"] }] }),
+    text("Thanks, proceeding with React.")
+  ]);
+  const orch = new Orchestrator(provider, config(root), "ask-run", "build an app", {
+    askUser: async (questions) => {
+      asked = questions;
+      return questions.map((q) => ({ question: q.question, answer: "React" }));
+    }
+  });
+  await orch.run("Build an app.");
+  assert.ok(asked, "askUser hook was invoked");
+  assert.equal(asked[0].question, "Which framework?");
+});
+
 function routedProvider(queues) {
   const q = Object.fromEntries(Object.entries(queues).map(([k, v]) => [k, [...v]]));
   return {

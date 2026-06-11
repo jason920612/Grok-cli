@@ -69,13 +69,19 @@ export class Orchestrator {
   private readonly applyToWorkingTree: boolean;
   private readonly usage?: SessionUsage;
   private readonly interjections?: Interjections;
+  private readonly askUser?: ToolExecutionContext["askUser"];
 
   constructor(
     private readonly provider: LLMProvider,
     private readonly config: GrokCodeConfig,
     runId: string,
     originalTask = "",
-    opts: { applyToWorkingTree?: boolean; usage?: SessionUsage; interjections?: Interjections } = {}
+    opts: {
+      applyToWorkingTree?: boolean;
+      usage?: SessionUsage;
+      interjections?: Interjections;
+      askUser?: ToolExecutionContext["askUser"];
+    } = {}
   ) {
     this.git = new GitService(config.workspaceRoot, runId);
     this.approval = new ApprovalPolicy(config.approval, originalTask);
@@ -88,6 +94,9 @@ export class Orchestrator {
     // Mid-task user messages are delivered to the orchestrator only (workers
     // follow their fixed brief), so the user talks to the one driving the plan.
     this.interjections = opts.interjections;
+    // The orchestrator is the user-facing agent, so it (and only it) can ask the
+    // user scoping questions via ask_user.
+    this.askUser = opts.askUser;
   }
 
   async run(task: string, signal?: AbortSignal): Promise<OrchestratorResult> {
@@ -222,7 +231,9 @@ export class Orchestrator {
       board: this.board,
       git: this.git,
       agentId: opts.agentId,
-      spawnWorker: opts.isOrchestrator ? this.spawnWorker : undefined
+      spawnWorker: opts.isOrchestrator ? this.spawnWorker : undefined,
+      // Only the orchestrator faces the user, so only it can ask scoping questions.
+      askUser: opts.isOrchestrator ? this.askUser : undefined
     };
 
     const config: GrokCodeConfig = { ...this.config, workspaceRoot: opts.root };

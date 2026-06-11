@@ -131,7 +131,12 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
 
 async function runReplTeam(agent: Agent, task: string, signal: AbortSignal, interjections?: Interjections): Promise<string> {
   console.log(chalk.dim("Multi-agent: orchestrator + parallel sub-agents…"));
-  const orchestrator = new Orchestrator(agent.provider, agent.config, randomUUID().slice(0, 8), task, { applyToWorkingTree: true, usage: agent.usage, interjections });
+  const orchestrator = new Orchestrator(agent.provider, agent.config, randomUUID().slice(0, 8), task, {
+    applyToWorkingTree: true,
+    usage: agent.usage,
+    interjections,
+    askUser: agent.askUser
+  });
   const result = await orchestrator.run(task, signal);
   if (result.applied && result.diff) return `${result.report}\n\n${chalk.dim("[changes applied to your working tree]")}\n${result.diff}`;
   if (!result.applied) return `${result.report}\n\n${chalk.dim(`[review branch] ${result.integrationBranch}`)}`;
