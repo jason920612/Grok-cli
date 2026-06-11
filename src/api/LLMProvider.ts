@@ -13,6 +13,7 @@
 
 export type ModelMessage =
   | { role: "system" | "user" | "assistant"; content: string }
+  | { role: "tool_call"; toolCallId: string; name: string; argsJson: string }
   | { role: "tool"; toolCallId: string; content: string };
 
 export type ToolSchema = Record<string, unknown>;

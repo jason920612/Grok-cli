@@ -97,6 +97,21 @@ export class WorkspaceSnapshotStore {
     return true;
   }
 
+  /** Find the most recent snapshot entry whose path matches the normalized relPath
+   * and restore it via the existing restore logic. Returns true on success
+   * or false if there is no matching snapshot.
+   */
+  restoreLatest(relPath: string, targetAbsPath: string): boolean {
+    const norm = normalizeRel(relPath);
+    const entries = this.read().entries;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i].path === norm) {
+        return this.restore(entries[i].id, targetAbsPath);
+      }
+    }
+    return false;
+  }
+
   private prune(manifest: Manifest): void {
     const minRound = manifest.maxRound - this.cfg.retainSteps;
     manifest.entries = manifest.entries.filter((e) => e.round >= minRound);

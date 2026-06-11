@@ -100,6 +100,9 @@ function toInputItem(message: ModelMessage): Record<string, unknown> {
   if (message.role === "tool") {
     return { type: "function_call_output", call_id: message.toolCallId, output: message.content };
   }
+  if (message.role === "tool_call") {
+    return { type: "function_call", call_id: message.toolCallId, name: message.name, arguments: message.argsJson };
+  }
   return { role: message.role, content: message.content };
 }
 

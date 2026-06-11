@@ -44,7 +44,7 @@ function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = 
     id: "test-model",
     capabilities: { serverTools: [], promptCaching: true },
     async complete(req) {
-      requests.push(req);
+      requests.push({ ...req, messages: req.messages.map((m) => ({ ...m })) });
       const next = responses[index++];
       const raw = typeof next === "function" ? next(req) : next;
       return toResult(raw ?? responseWithText(`r${index}`, "done"));
@@ -73,6 +73,9 @@ function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = 
       },
       nextStep() {},
       relevant() {
+        return storedContextItems;
+      },
+      list() {
         return storedContextItems;
       },
       add(item) {
@@ -108,26 +111,25 @@ function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = 
   return { loop, requests, toolCalls, contextItems: storedContextItems, usedNames };
 }
 
-function lastInput(req) {
-  return String(req.messages[0].content);
+function allInput(req) {
+  return req.messages
+    .map((m) => ("content" in m ? m.content : `${m.role}:${m.name} ${m.argsJson ?? ""}`))
+    .join("\n");
 }
 
-test("plan-only reprompt is injected into the next stateless prompt", async () => {
-  const { loop, requests, usedNames } = makeLoop({
+test("plan-only reprompt is appended to the transcript as a user message", async () => {
+  const { loop, requests } = makeLoop({
     responses: [responseWithText("r1", "I will now use tools to inspect it."), responseWithText("r2", "done")]
   });
-  void usedNames;
   await loop.run("fix bug", true);
   assert.equal(requests.length, 2);
-  assert.match(lastInput(requests[1]), /You provided a plan but did not request any function_call tools/);
-  assert.match(lastInput(requests[1]), /<Runtime Feedback>/);
+  // the second request's transcript contains the prior assistant turn + the reprompt
+  assert.match(allInput(requests[1]), /You provided a plan but did not request any function_call tools/);
+  assert.match(allInput(requests[1]), /I will now use tools to inspect it\./);
 });
 
-test("stateless prompt separates verified facts, prior actions, and inferences", async () => {
+test("transcript carries the tool call and its result forward to the next step", async () => {
   const { loop, requests } = makeLoop({
-    contextItems: [
-      { type: "task_summary", content: "Likely needs parser changes.", priority: 60, factSource: "model_inference", factConfidence: "inferred", tokensEstimate: 10 }
-    ],
     responses: [
       responseWithTool("r1", functionCall("read_file_range", { path: "src/parser.ts", startLine: 1, endLine: 20 }, "c1")),
       responseWithText("r2", "done")
@@ -136,12 +138,12 @@ test("stateless prompt separates verified facts, prior actions, and inferences",
     execute: (n, a) => ({ ok: true, data: {}, summary: `${n} ${a.path}` })
   });
   await loop.run("inspect parser", true);
-  const input = lastInput(requests[1]);
-  assert.match(input, /<Situation Memory>/);
-  assert.match(input, /read_file_range succeeded: read_file_range src\/parser\.ts/);
-  assert.match(input, /step 1: read_file_range/);
-  assert.match(input, /Model inferences \/ hypotheses, not verified facts:/);
-  assert.match(input, /Likely needs parser changes/);
+  const second = requests[1];
+  // the model's tool call and the tool result are both present in the transcript
+  assert.ok(second.messages.some((m) => m.role === "tool_call" && m.name === "read_file_range"));
+  assert.ok(second.messages.some((m) => m.role === "tool" && /read_file_range src\/parser\.ts/.test(m.content)));
+  // first request is just system + task (no premature tool turns)
+  assert.deepEqual(requests[0].messages.map((m) => m.role), ["system", "user"]);
 });
 
 test("failed shell verification command can rerun after a successful patch", async () => {
@@ -200,8 +202,8 @@ test("multiple tool calls are rejected and corrected before execution", async ()
   });
   await loop.run("inspect files", true);
   assert.equal(toolCalls.length, 0);
-  assert.match(lastInput(requests[1]), /Invalid response: requested 2 tool calls/);
-  assert.match(lastInput(requests[1]), /exactly one tool call/);
+  assert.match(allInput(requests[1]), /Invalid response: requested 2 tool calls/);
+  assert.match(allInput(requests[1]), /exactly one tool call/);
 });
 
 test("repeated identical successful read-only call is blocked (no-progress)", async () => {
@@ -243,7 +245,7 @@ test("empty-response guard reprompts once then stops on repeated empty responses
   });
   const output = await loop.run("do something", true);
   assert.equal(requests.length, 2);
-  assert.match(lastInput(requests[1]), /Your previous response was empty/);
+  assert.match(allInput(requests[1]), /Your previous response was empty/);
   assert.match(output, /\[Agent stopped: model returned repeated empty responses without tool calls or a final answer\.\]/);
 });
 

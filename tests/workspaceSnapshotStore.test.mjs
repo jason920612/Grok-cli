@@ -95,6 +95,27 @@ test("orphan blobs are garbage-collected when their entries are pruned", () => {
   assert.equal(blobs.length, 1, "pruned entry's orphan blob removed");
 });
 
+test("restoreLatest brings back the most recent pre-image for a path", () => {
+  const root = makeWorkspace();
+  const file = path.join(root, "a.ts");
+  const store = new WorkspaceSnapshotStore(root);
+
+  fs.writeFileSync(file, "v1");
+  store.snapshot(file, "a.ts", "overwrite", 1); // pre-image v1
+  fs.writeFileSync(file, "v2");
+  store.snapshot(file, "a.ts", "overwrite", 2); // pre-image v2 (most recent)
+  fs.writeFileSync(file, "v3");
+
+  assert.ok(store.restoreLatest("a.ts", file));
+  assert.equal(fs.readFileSync(file, "utf8"), "v2");
+});
+
+test("restoreLatest returns false when no snapshot matches the path", () => {
+  const root = makeWorkspace();
+  const store = new WorkspaceSnapshotStore(root);
+  assert.equal(store.restoreLatest("never.ts", path.join(root, "never.ts")), false);
+});
+
 test("restore returns false for unknown id", () => {
   const root = makeWorkspace();
   const store = new WorkspaceSnapshotStore(root);

@@ -1,5 +1,5 @@
 import ora from "ora";
-import type { LLMProvider } from "../api/LLMProvider.js";
+import type { LLMProvider, ModelMessage } from "../api/LLMProvider.js";
 import type { ResponseTool } from "../api/responsesClient.js";
 import type { GrokCodeConfig } from "../config/loadConfig.js";
 import type { ContextManager } from "../context/ContextManager.js";
@@ -9,7 +9,7 @@ import type { SkillLoader } from "../skills/SkillLoader.js";
 import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import type { ContextItem } from "../context/ContextItem.js";
 import { TUNING } from "../config/tuning.js";
-import { buildStatelessInput } from "./modelInputBuilder.js";
+import { buildSystemPreamble } from "./modelInputBuilder.js";
 import { finalAnswerGate } from "./finalAnswerGate.js";
 import { VerifierAgent, buildVerifierFeedback } from "./VerifierAgent.js";
 import type { EvidenceBundle, EvidenceMemoryFact, VerifierVerdict } from "./EvidenceBundle.js";
@@ -56,42 +56,39 @@ export class AgentLoop {
     const executor = new ToolExecutor(this.tools, this.toolCtx, this.context);
     const guards: ResponseGuard[] = [this.emptyGuard, this.planOnlyGuard];
     const executorTrace: string[] = [];
-    let runtimeFeedback: string | undefined;
     let verifierAttempts = 0;
-    let lastVerifierFeedback: string | undefined;
     let lastVerifierVerdict: VerifierVerdict | undefined;
     let finalText = "";
     let noProgressStreak = 0;
 
+    // Codex-style transcript: stable system preamble + task, then accumulating
+    // assistant / tool_call / tool-result turns. Sent in full each step (no
+    // server-side chaining); the model sees everything it has done, so it never
+    // has to re-read what it already observed.
+    const system = buildSystemPreamble({
+      toolIndex: this.toolSkills.toolIndex(),
+      generalSkills: this.skillLoader.select(task),
+      toolSkills: this.toolSkills.select(task, []),
+      projectInstructions: this.projectInstructions,
+      workspaceContext: this.workspaceContext()
+    });
+    const messages: ModelMessage[] = [
+      { role: "system", content: system },
+      { role: "user", content: `<Current Task>\n${task}\n</Current Task>` }
+    ];
+
     while (state.advance()) {
       this.context.nextStep(task);
-      await this.maybeSummarize(executor.summaries);
-
-      const relevant = this.context.relevant(task, TUNING.context.relevantDefaultTokens);
-      const input = buildStatelessInput({
-        task,
-        verifiedFacts: executor.summaries.map((s) => `${s.name} ${s.ok ? "succeeded" : "failed"}: ${s.summary}`),
-        observations: buildObservations(relevant),
-        priorActions: executor.summaries.map((s) => `step ${s.step}: ${s.name}(${s.args ?? ""}) -> ${s.ok ? "ok" : "failed"}`),
-        inferredFacts: buildStatelessInferences(this.context.relevant(task, TUNING.context.statelessInferenceTokens)),
-        lastFailure: executor.failureTracker.lastFailure(),
-        verifierFeedback: lastVerifierFeedback,
-        runtimeFeedback,
-        toolIndex: this.toolSkills.toolIndex(),
-        generalSkills: this.skillLoader.select(task),
-        toolSkills: this.toolSkills.select(task, [...executor.usedToolNames]),
-        projectInstructions: this.projectInstructions
-      });
+      this.compactTranscript(messages);
 
       const spinner = ora(`Grok thinking (step ${state.step})`).start();
       let response;
       try {
         response = await this.provider.complete({
-          messages: [{ role: "user", content: input }],
+          messages,
           tools: this.tools.schemas(serverTools(this.config)),
           toolChoice: this.config.toolChoice,
-          // Single-tool discipline (MultiToolGuard) — tell the API not to batch,
-          // otherwise the model emits parallel calls we reject, wasting a step each.
+          // Single-tool discipline (MultiToolGuard) — tell the API not to batch.
           parallelToolCalls: false,
           signal
         });
@@ -108,13 +105,13 @@ export class AgentLoop {
         actionCount: executor.summaries.length
       };
 
-      // Non-empty response resets the empty-response reprompt budget.
       if (response.text || response.toolCalls.length > 0) state.resetReprompt(this.emptyGuard.id);
 
       if (response.toolCalls.length === 0) {
         const blocked = this.applyZeroToolGuards(guards, guardCtx, state, executorTrace);
         if (blocked.action === "reprompt") {
-          runtimeFeedback = blocked.feedback;
+          if (response.text) messages.push({ role: "assistant", content: response.text });
+          messages.push({ role: "user", content: blocked.feedback });
           continue;
         }
         if (blocked.action === "terminate") {
@@ -133,16 +130,9 @@ export class AgentLoop {
             if (verdict.verdict !== "pass") {
               const feedback = buildVerifierFeedback(verdict);
               this.events.emit({ type: "verifier", message: `[Verifier] ${verdict.verdict} (confidence: ${verdict.confidence}): ${verdict.reason}` });
-              lastVerifierFeedback = feedback;
-              runtimeFeedback = undefined;
-              this.context.upsert("verifier-feedback", {
-                type: "verifier_feedback",
-                content: feedback,
-                priority: 95,
-                pinned: false,
-                expiresAfterSteps: TUNING.expiry.verifierFeedback
-              });
               recordVerifierTasks(this.context, verdict);
+              if (response.text) messages.push({ role: "assistant", content: response.text });
+              messages.push({ role: "user", content: feedback });
               continue;
             }
             this.events.emit({ type: "verifier", message: `[Verifier] pass (confidence: ${verdict.confidence})` });
@@ -162,22 +152,28 @@ export class AgentLoop {
       }
 
       if (response.toolCalls.length > 1) {
-        runtimeFeedback = this.multiToolGuard.feedback(guardCtx);
+        if (response.text) messages.push({ role: "assistant", content: response.text });
+        messages.push({ role: "user", content: this.multiToolGuard.feedback(guardCtx) });
         continue;
       }
 
-      this.events.emit({ type: "tool_batch", step: state.step, message: formatToolBatch(state.step, response.toolCalls.map((c) => c.name)) });
-      await executor.executeOne(response.toolCalls[0], state.step, signal);
-      runtimeFeedback = undefined;
+      const call = response.toolCalls[0];
+      this.events.emit({ type: "tool_batch", step: state.step, message: formatToolBatch(state.step, [call.name]) });
+      if (response.text) messages.push({ role: "assistant", content: response.text });
+      messages.push({ role: "tool_call", toolCallId: call.id, name: call.name, argsJson: call.argsJson });
+      const out = await executor.executeOne(call, state.step, signal);
+      messages.push({ role: "tool", toolCallId: call.id, content: out.output });
 
-      // Analysis-paralysis nudge: after a run of inspection with no mutation,
-      // push the model to stop gathering context and act.
+      // Analysis-paralysis nudge: after a run of inspection with no mutation.
       noProgressStreak = executor.lastProgress ? 0 : noProgressStreak + 1;
       if (noProgressStreak >= TUNING.guard.actionNudgeAfterNoProgress) {
-        runtimeFeedback =
-          `You have run ${noProgressStreak} inspection steps without changing anything. ` +
-          "Stop gathering context now. If the task requires an edit, read the exact target lines if you have not, then make the change with apply_patch this turn. " +
-          "If the task is already answerable, give the final answer. Do not run more searches or reads that repeat what you already know.";
+        messages.push({
+          role: "user",
+          content:
+            `You have run ${noProgressStreak} inspection steps without changing anything. ` +
+            "Stop gathering context now. If the task requires an edit, read the exact target lines if you have not, then make the change with apply_patch this turn. " +
+            "If the task is already answerable, give the final answer. Do not repeat reads or searches whose results are already above."
+        });
         noProgressStreak = 0;
       }
     }
@@ -242,6 +238,36 @@ export class AgentLoop {
     });
   }
 
+  /** Pinned workspace context (repo summary, environment) for the stable system preamble. */
+  private workspaceContext(): string[] {
+    return this.context
+      .list()
+      .filter((item) => item.pinned && PREAMBLE_CONTEXT_TYPES.has(item.type))
+      .map((item) => `<${item.type}>\n${item.content}`);
+  }
+
+  /**
+   * Keep the transcript bounded. When over budget, elide the content of the
+   * OLDEST tool-result turns (keeping system, task, and the most recent turns),
+   * so the model retains recent observations while old bulk is dropped.
+   */
+  private compactTranscript(messages: ModelMessage[]): void {
+    const budget = TUNING.budget.maxInputTokens - TUNING.budget.reservedForOutput;
+    const keepRecent = 10;
+    const sizeOf = (m: ModelMessage): number =>
+      Math.ceil(("content" in m ? m.content : `${m.name} ${m.argsJson}`).length / TUNING.token.charsPerToken);
+    let total = messages.reduce((sum, m) => sum + sizeOf(m), 0);
+    if (total <= budget) return;
+    for (let i = 2; i < messages.length - keepRecent && total > budget; i++) {
+      const m = messages[i];
+      if (m.role === "tool" && m.content.length > 120) {
+        const before = sizeOf(m);
+        m.content = `[older tool result elided to save context — ${m.content.length} chars]`;
+        total -= before - sizeOf(m);
+      }
+    }
+  }
+
   private buildBundle(task: string, claim: string, trace: string[], summaries: ToolExecutor["summaries"]): EvidenceBundle {
     return {
       userTask: task,
@@ -289,38 +315,12 @@ function buildVerifierMemoryFacts(items: ContextItem[]): EvidenceMemoryFact[] {
     }));
 }
 
-const OBSERVATION_TYPES = new Set<ContextItem["type"]>([
-  "file_range",
-  "file_overview",
-  "search_result",
-  "shell_output",
-  "test_result",
-  "patch",
+const PREAMBLE_CONTEXT_TYPES = new Set<ContextItem["type"]>([
   "repo_summary",
+  "environment_policy",
   "environment_summary",
   "project_tooling_summary"
 ]);
-
-/** Render the actual content of verified observations so the model can act without re-reading. */
-function buildObservations(items: ContextItem[]): string[] {
-  return items
-    .filter((item) => OBSERVATION_TYPES.has(item.type))
-    .map((item) => {
-      const where = item.source?.path
-        ? ` ${item.source.path}${item.source.startLine !== undefined ? `:${item.source.startLine}-${item.source.endLine ?? item.source.startLine}` : ""}`
-        : item.source?.command
-          ? ` (${item.source.command})`
-          : "";
-      return `<${item.type}${where}>\n${item.content}`;
-    });
-}
-
-function buildStatelessInferences(items: ContextItem[]): string[] {
-  return items
-    .filter((item) => item.factConfidence === "inferred" || item.factSource === "model_inference")
-    .slice(-TUNING.context.statelessInferenceLimit)
-    .map((item) => `${item.type}: ${oneLine(item.content, 300)}`);
-}
 
 function recordVerifierTasks(context: ContextManager, verdict: VerifierVerdict): void {
   const tasks = [

@@ -43,7 +43,14 @@ async function rgSearch(ctx: any, query: string, base: string, glob: string | un
 }
 
 async function nodeSearch(ctx: any, query: string, base: string, glob: string | undefined, max: number) {
-  const entries = await fg(glob ?? "**/*", { cwd: ctx.sandbox.resolvePath(base), onlyFiles: true, dot: true, ignore: ["**/.git/**", "**/node_modules/**"] });
+  // The model often passes a FILE path as `path`; search within that file
+  // instead of failing with ENOTDIR (treating a file as a directory cwd).
+  const baseAbs = ctx.sandbox.resolvePath(base);
+  const baseStat = await fs.stat(baseAbs).catch(() => null);
+  if (baseStat?.isFile()) {
+    return searchOneFile(ctx, query, base, max);
+  }
+  const entries = await fg(glob ?? "**/*", { cwd: baseAbs, onlyFiles: true, dot: true, ignore: ["**/.git/**", "**/node_modules/**"] });
   const results: Array<{ path: string; line: number; preview: string }> = [];
   for (const entry of entries) {
     const rel = base === "." ? entry : `${base}/${entry}`;
@@ -55,5 +62,16 @@ async function nodeSearch(ctx: any, query: string, base: string, glob: string | 
     });
     if (results.length >= max) break;
   }
+  return results;
+}
+
+async function searchOneFile(ctx: any, query: string, relPath: string, max: number) {
+  if (ctx.sandbox.isPathDenied(relPath, "read")) return [];
+  let text = "";
+  try { text = await fs.readFile(ctx.sandbox.assertReadableFile(relPath), "utf8"); } catch { return []; }
+  const results: Array<{ path: string; line: number; preview: string }> = [];
+  text.split(/\r?\n/).forEach((line, index) => {
+    if (results.length < max && line.includes(query)) results.push({ path: relPath, line: index + 1, preview: line.trim().slice(0, 300) });
+  });
   return results;
 }

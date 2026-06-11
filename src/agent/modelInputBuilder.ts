@@ -33,6 +33,47 @@ export type StatelessInputBuildOptions = {
   projectInstructions: string;
 };
 
+export type SystemPreambleOptions = {
+  toolIndex: string;
+  generalSkills: Skill[];
+  toolSkills: ToolSkill[];
+  projectInstructions: string;
+  workspaceContext: string[];
+};
+
+/**
+ * Stable system preamble for the transcript (§ Codex-style). Built once per run
+ * and reused as the first message every step, so it stays prefix-cache friendly.
+ * The task and the accumulating tool-call/result turns are separate messages.
+ */
+export function buildSystemPreamble(options: SystemPreambleOptions): string {
+  return `<System>
+${CORE_SYSTEM_PROMPT}
+
+${STATELESS_EPISTEMIC_STANCE}
+</System>
+
+<Tool Index>
+${options.toolIndex}
+</Tool Index>
+
+<Active General Skills>
+${options.generalSkills.map((skill) => skill.content).join("\n\n") || "None."}
+</Active General Skills>
+
+<Active Full Tool Skills>
+${options.toolSkills.map((skill) => skill.full).join("\n\n") || "None."}
+</Active Full Tool Skills>
+
+<Project Instructions>
+${options.projectInstructions || "None."}
+</Project Instructions>
+
+<Workspace Context>
+${options.workspaceContext.join("\n\n") || "None."}
+</Workspace Context>`;
+}
+
 export function buildStatelessInput(options: StatelessInputBuildOptions): string {
   const verifiedFacts = options.verifiedFacts.length > 0
     ? options.verifiedFacts.map((o) => `- ${o}`).join("\n")
