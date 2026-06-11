@@ -253,23 +253,42 @@ function expandableFile(headHtml, p, diffBody) {
     body.style.display = open ? "block" : "none";
     head.querySelector(".caret").textContent = open ? "▼" : "▶";
     if (!open || loaded) return;
-    loaded = true;
     if (IMG_EXT.test(p)) {
+      loaded = true;
       const img = document.createElement("img");
       img.src = fileUrl(p);
       img.style.cssText = "max-width:100%;display:block;border-top:1px solid var(--border)";
       img.onerror = () => { body.innerHTML = "<pre class=mono>(image not available)</pre>"; };
       body.appendChild(img);
-    } else {
+    } else if (diffBody != null) {
+      loaded = true;
       const pre = document.createElement("pre");
       pre.className = "mono";
-      if (diffBody != null) {
-        pre.innerHTML = colorDiff(diffBody);
-      } else {
-        pre.textContent = "loading…";
-        try { pre.textContent = await (await fetch(fileUrl(p))).text(); } catch { pre.textContent = "(could not load)"; }
-      }
+      pre.innerHTML = colorDiff(diffBody);
       body.appendChild(pre);
+    } else {
+      // Lazily fetch the file from the workspace. Do NOT mark loaded until it
+      // succeeds: in multi-agent runs a file read inside a worker's isolated
+      // worktree only lands in the workspace after the run is applied, so an
+      // early click can 404 — leaving it unloaded lets a later click retry.
+      body.innerHTML = "";
+      const pre = document.createElement("pre");
+      pre.className = "mono";
+      pre.textContent = "loading…";
+      body.appendChild(pre);
+      try {
+        const res = await fetch(fileUrl(p));
+        if (res.ok) {
+          pre.textContent = await res.text();
+          loaded = true;
+        } else if (res.status === 404) {
+          pre.textContent = "(not in the current workspace yet — a worker may still be building it, or it was read from an isolated copy. Try again after the run finishes.)";
+        } else {
+          pre.textContent = "(could not load: " + res.status + ")";
+        }
+      } catch {
+        pre.textContent = "(could not load)";
+      }
     }
   };
   card.appendChild(head);
