@@ -17,6 +17,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/git-status", usage: "/git-status", description: "Show git status." },
   { name: "/diff", usage: "/diff", description: "Show git-style diff for current changes." },
   { name: "/approval", usage: "/approval", description: "Choose approval mode from a menu." },
+  { name: "/agents", usage: "/agents [on|off]", description: "Toggle multi-agent mode (orchestrator + parallel sub-agents) for tasks." },
   { name: "/clear", usage: "/clear", description: "Compact and clear stale context." },
   { name: "/model", usage: "/model <model>", description: "Show model change guidance.", hidden: true },
   { name: "/resume", usage: "/resume", description: "Show resume guidance.", hidden: true },

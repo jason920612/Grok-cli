@@ -137,6 +137,15 @@ export class GitService {
     return this.run(["diff", "--stat", `HEAD..${this.integrationBranch}`], this.repoRoot).stdout.trim();
   }
 
+  /** Copy the integrated files into the working tree (uncommitted) without moving HEAD — for interactive use. */
+  checkoutIntegrationIntoWorkingTree(): void {
+    this.run(["checkout", this.integrationBranch, "--", "."], this.repoRoot);
+  }
+
+  deleteIntegrationBranch(): void {
+    this.run(["branch", "-D", this.integrationBranch], this.repoRoot);
+  }
+
   /** Remove all worktrees and worker branches. The integration branch is kept for the user to review/merge. */
   teardown(): void {
     for (const name of this.workers) {

@@ -31,7 +31,7 @@ export class Agent {
   readonly skillLoader: SkillLoader;
   private round = 0;
 
-  constructor(private readonly provider: LLMProvider, readonly config: GrokCodeConfig, originalTask = "") {
+  constructor(readonly provider: LLMProvider, readonly config: GrokCodeConfig, originalTask = "") {
     this.sandbox = new WorkspaceSandbox(config.workspaceRoot, config.sandboxProfile, config.workspaceTrusted);
     this.snapshots = new WorkspaceSnapshotStore(config.workspaceRoot);
     this.memory = new ProjectMemory(config.workspaceRoot);

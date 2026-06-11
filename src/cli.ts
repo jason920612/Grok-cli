@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import chalk from "chalk";
 import { createXaiProvider } from "./api/XaiResponsesProvider.js";
 import { Agent } from "./agent/Agent.js";
 import { Orchestrator } from "./agents/Orchestrator.js";
@@ -194,7 +195,10 @@ async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void>
 }
 
 async function runInteractive(opts: CliOpts): Promise<void> {
-  if (!(await ensureWorkspaceTrusted(process.cwd()))) return;
+  if (!(await ensureWorkspaceTrusted(process.cwd()))) {
+    console.log(chalk.yellow("Workspace not trusted — interactive session cancelled. Run grok-code again to retry."));
+    return;
+  }
   const agent = await makeAgent(opts, "interactive session");
   const finalAgent = await startRepl(agent, {
     switchWorkspace: async (workspace) => {
@@ -207,7 +211,10 @@ async function runInteractive(opts: CliOpts): Promise<void> {
 }
 
 async function runResume(sessionId: string | undefined, opts: CliOpts): Promise<void> {
-  if (!(await ensureWorkspaceTrusted(process.cwd()))) return;
+  if (!(await ensureWorkspaceTrusted(process.cwd()))) {
+    console.log(chalk.yellow("Workspace not trusted — resume cancelled. Run grok-code again to retry."));
+    return;
+  }
   const store = new SessionStore(process.cwd());
   const session = store.load(sessionId);
   if (!session) throw new Error("No session found.");

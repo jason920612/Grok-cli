@@ -44,7 +44,7 @@ You are in an ISOLATED git worktree — edit files with apply_patch (read the li
 Discuss on the board (comment) if blocked or you need clarification; @mention the orchestrator.
 When your task is complete, call open_pr with a clear summary and link your issue. That is your completion signal.`;
 
-export type OrchestratorResult = { report: string; integrationBranch: string; diff: string; ephemeral: boolean };
+export type OrchestratorResult = { report: string; integrationBranch: string; diff: string; ephemeral: boolean; applied: boolean };
 
 /**
  * Drives a multi-agent run (subagents-v1). The orchestrator is an AgentLoop with
@@ -61,15 +61,21 @@ export class Orchestrator {
   private spawnCount = 0;
   private setupDone = false;
 
+  private readonly applyToWorkingTree: boolean;
+
   constructor(
     private readonly provider: LLMProvider,
     private readonly config: GrokCodeConfig,
     runId: string,
-    originalTask = ""
+    originalTask = "",
+    opts: { applyToWorkingTree?: boolean } = {}
   ) {
     this.git = new GitService(config.workspaceRoot, runId);
     this.approval = new ApprovalPolicy(config.approval, originalTask);
     this.memory = new ProjectMemory(config.workspaceRoot);
+    // Interactive use applies the result to the working tree; one-shot real-git
+    // runs leave a review branch instead.
+    this.applyToWorkingTree = opts.applyToWorkingTree ?? false;
   }
 
   async run(task: string, signal?: AbortSignal): Promise<OrchestratorResult> {
@@ -104,10 +110,13 @@ export class Orchestrator {
       if (this.setupDone) {
         diff = this.git.integrationDiff();
         if (ephemeral) this.git.applyIntegrationToWorkingTree();
+        else if (this.applyToWorkingTree) this.git.checkoutIntegrationIntoWorkingTree();
       }
-      return { report, integrationBranch: this.git.integrationBranch, diff, ephemeral };
+      const applied = ephemeral || this.applyToWorkingTree;
+      return { report, integrationBranch: this.git.integrationBranch, diff, ephemeral, applied };
     } finally {
       if (this.setupDone) this.git.teardown();
+      if (this.setupDone && this.applyToWorkingTree && !ephemeral) this.git.deleteIntegrationBranch();
       if (ephemeral) this.git.removeEphemeralGit();
     }
   }

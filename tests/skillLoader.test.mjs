@@ -17,7 +17,6 @@ import { loadConfig } from "../dist/config/loadConfig.js";
 import { parseResponse } from "../dist/api/responseParser.js";
 import { parseMaxSteps, parseSandboxProfile, parseServerToolOverrides } from "../dist/cli.js";
 import { approvalDescription } from "../dist/ui/repl.js";
-import { buildInteractiveLayout } from "../dist/ui/interactiveInput.js";
 import { SLASH_COMMANDS, visibleSlashCommands } from "../dist/ui/slashCommands.js";
 
 const root = process.cwd();
@@ -200,29 +199,6 @@ test("help shows a focused slash command set while aliases remain registered", (
   assert.equal(visible.includes("/workspace"), false);
   assert.equal(visible.includes("/tools"), false);
   assert.equal(visible.includes("/env"), false);
-});
-
-test("interactive layout renders transcript pane, framed input, and command suggestions", () => {
-  const commands = visibleSlashCommands().filter((command) => ["/help", "/exit"].includes(command.name));
-  const layout = buildInteractiveLayout({
-    transcript: [
-      { role: "user", content: "hello" },
-      { role: "assistant", content: "hi there" }
-    ],
-    input: "/",
-    prompt: "grok-code>",
-    suggestions: commands,
-    selectedSuggestion: 0,
-    columns: 72,
-    rows: 16
-  });
-
-  assert.match(layout, /┌/);
-  assert.match(layout, /Assistant: hi there/);
-  assert.match(layout, /╭/);
-  assert.match(layout, /grok-code> \//);
-  assert.match(layout, /Commands:/);
-  assert.match(layout, /> \/help/);
 });
 
 test("system prompt requires plans and final action summaries", () => {

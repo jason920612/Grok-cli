@@ -1,6 +1,8 @@
 import chalk from "chalk";
+import { randomUUID } from "node:crypto";
 import { select, input } from "@inquirer/prompts";
 import type { Agent } from "../agent/Agent.js";
+import { Orchestrator } from "../agents/Orchestrator.js";
 import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
 import { colorDiff } from "./diffView.js";
@@ -12,6 +14,7 @@ import { chooseWorkspace, formatWorkspaceTrustStatus, manageWorkspaceTrust } fro
 
 type ReplOptions = {
   switchWorkspace?: (workspace: string) => Promise<Agent>;
+  multiAgentDefault?: boolean;
 };
 
 /** Interactive scoping questions (scoping-v1 §6). Asks the user in the REPL. */
@@ -35,13 +38,32 @@ function attachAskUser(agent: Agent): void {
 export async function startRepl(initialAgent: Agent, options: ReplOptions = {}): Promise<Agent> {
   let agent = initialAgent;
   attachAskUser(agent);
-  const transcript: TranscriptEntry[] = [{ role: "system", content: "Type /help for commands, /exit to quit." }];
+  const transcript: TranscriptEntry[] = [];
+  const history: string[] = [];
+  let useAgents = options.multiAgentDefault ?? false;
+
+  console.log(chalk.dim(`Type ${chalk.cyan("/help")} for commands, ${chalk.cyan("/exit")} to quit. Esc interrupts a running task.`));
   for (;;) {
-    const line = await readInteractiveLine("grok-code>", { transcript });
+    let line: string;
+    try {
+      line = await readInteractiveLine(useAgents ? "grok-code ⚡" : "grok-code>", { history });
+    } catch {
+      break; // stdin closed
+    }
     const text = line.trim();
     if (!text) continue;
-    if (text === "/exit") break;
+    if (text === "/exit" || text === "/quit") break;
     remember(transcript, "user", text);
+
+    if (text === "/agents" || text.startsWith("/agents ")) {
+      const arg = text.split(/\s+/)[1]?.toLowerCase();
+      useAgents = arg === "on" ? true : arg === "off" ? false : !useAgents;
+      const msg = `Multi-agent mode ${useAgents ? chalk.green("ON") : chalk.yellow("OFF")} — ${useAgents ? "orchestrator delegates to parallel sub-agents (changes applied to your files)" : "single agent"}.`;
+      remember(transcript, "system", msg);
+      console.log(msg);
+      continue;
+    }
+
     if (text.startsWith("/")) {
       const nextAgent = await handleSlash(text, agent, options, (content) => remember(transcript, "system", content));
       if (nextAgent) {
@@ -50,17 +72,31 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
       }
       continue;
     }
+
     try {
-      const response = await runWithEscInterrupt((signal) => agent.run(text, false, signal));
+      const response = await runWithEscInterrupt((signal) =>
+        useAgents ? runReplTeam(agent, text, signal) : agent.run(text, false, signal)
+      );
       remember(transcript, "assistant", String(response));
-      console.log(response);
+      console.log(`\n${response}\n`);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       remember(transcript, "system", message);
-      console.log(chalk.yellow(message));
+      const interrupted = /interrupt/i.test(message);
+      console.log(interrupted ? chalk.yellow(message) : chalk.red(`Error: ${message}`));
     }
   }
+  console.log(chalk.dim("Goodbye."));
   return agent;
+}
+
+async function runReplTeam(agent: Agent, task: string, signal: AbortSignal): Promise<string> {
+  console.log(chalk.dim("Multi-agent: orchestrator + parallel sub-agents…"));
+  const orchestrator = new Orchestrator(agent.provider, agent.config, randomUUID().slice(0, 8), task, { applyToWorkingTree: true });
+  const result = await orchestrator.run(task, signal);
+  if (result.applied && result.diff) return `${result.report}\n\n${chalk.dim("[changes applied to your working tree]")}\n${result.diff}`;
+  if (!result.applied) return `${result.report}\n\n${chalk.dim(`[review branch] ${result.integrationBranch}`)}`;
+  return result.report;
 }
 
 async function handleSlash(command: string, agent: Agent, options: ReplOptions, emit: (content: string) => void): Promise<Agent | void> {
@@ -139,7 +175,7 @@ async function handleSlash(command: string, agent: Agent, options: ReplOptions, 
       break;
     case "/clear":
       agent.context.compactContext("cleared interactive context");
-      output("context compacted");
+      output("Context compacted — stale items summarized, pinned items kept.");
       break;
     case "/resume":
       output("Use `grok-code resume [session-id]` from the shell.");
