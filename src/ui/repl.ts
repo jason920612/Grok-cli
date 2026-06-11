@@ -138,7 +138,9 @@ async function runReplTeam(agent: Agent, task: string, signal: AbortSignal, inte
     applyToWorkingTree: true,
     usage: agent.usage,
     interjections,
-    askUser: agent.askUser
+    askUser: agent.askUser,
+    // Share the agent's live policy so the TUI auto-approve toggle / mode change reaches workers.
+    approval: agent.approval
   });
   const result = await orchestrator.run(task, signal);
   if (result.applied && result.diff) return `${result.report}\n\n${chalk.dim("[changes applied to your working tree]")}\n${result.diff}`;

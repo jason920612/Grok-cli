@@ -282,7 +282,10 @@ class WebSession {
           usage: this.agent.usage,
           interjections: this.interjections,
           askUser: this.webAskUser,
-          approvalPrompter: this.webPrompter,
+          // Share the session's live ApprovalPolicy (prompter already routed to the
+          // browser in wire()) so changing the approval mode / auto-approve toggle
+          // mid-run takes effect for the orchestrator and every worker.
+          approval: this.agent.approval,
           eventSinkFactory: (label, isWorker) => new WebEventSink(isWorker ? `worker:${label}` : label, (ev) => this.emit(ev))
         });
         const result = await orchestrator.run(text, this.controller.signal);

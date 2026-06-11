@@ -109,11 +109,17 @@ export class Orchestrator {
       interjections?: Interjections;
       askUser?: ToolExecutionContext["askUser"];
       approvalPrompter?: ApprovalPrompter;
+      /** Share the caller's live ApprovalPolicy so mid-run mode changes (dropdown / auto-approve toggle) reach workers. */
+      approval?: ApprovalPolicy;
       eventSinkFactory?: (label: string, isWorker: boolean) => AgentEventSink;
     } = {}
   ) {
     this.git = new GitService(config.workspaceRoot, runId);
-    this.approval = new ApprovalPolicy(config.approval, originalTask);
+    // Prefer the caller's live policy (interactive UI): the user can change the
+    // approval mode or flip auto-approve mid-run and it must affect the running
+    // orchestrator AND every worker (they share this instance). Only fall back to
+    // a fresh snapshot when no shared policy is supplied (one-shot CLI runs).
+    this.approval = opts.approval ?? new ApprovalPolicy(config.approval, originalTask);
     this.memory = new ProjectMemory(config.workspaceRoot);
     // Interactive use applies the result to the working tree; one-shot real-git
     // runs leave a review branch instead.

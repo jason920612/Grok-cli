@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { Orchestrator } from "../dist/agents/Orchestrator.js";
+import { ApprovalPolicy } from "../dist/approval/ApprovalPolicy.js";
 
 function gitRepo() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "grok-orch-"));
@@ -120,6 +121,32 @@ test("orchestrator's ask_user reaches the interactive askUser hook", async () =>
   await orch.run("Build an app.");
   assert.ok(asked, "askUser hook was invoked");
   assert.equal(asked[0].question, "Which framework?");
+});
+
+test("orchestrator + workers use the caller's shared ApprovalPolicy, not a config snapshot", async () => {
+  const root = gitRepo();
+  // High-risk path (package.json) so a worker patch needs approval under on-request.
+  const provider = scriptedProvider([
+    fnCall("spawn_agent", { name: "worker1", role: "Edit package.json as briefed.", brief: "Add a scripts field to package.json." }),
+    fnCall("apply_patch", { patch: "*** Begin Patch\n*** Add File: package.json\n+{\"name\":\"x\"}\n*** End Patch", reason: "create package.json" }),
+    fnCall("open_pr", { title: "Add package.json", body: "Created package.json.", linkedIssue: 1 }),
+    text("Worker done."),
+    text("All done.")
+  ]);
+  // config says auto-all (a fresh snapshot would silently approve everything),
+  // but the shared policy is on-request with a recording prompter.
+  const calls = [];
+  const shared = new ApprovalPolicy("on-request", "edit package.json");
+  shared.prompter = async (command) => {
+    calls.push(command);
+    return { approved: true };
+  };
+  const orch = new Orchestrator(provider, config(root), "shared-approval-run", "edit package.json", { approval: shared });
+  await orch.run("Add a scripts field to package.json.");
+  // If the orchestrator had built its own auto-all policy from config, the prompter
+  // would never fire. It fires because the worker consulted the SHARED on-request policy.
+  assert.ok(calls.length >= 1, "shared prompter was consulted by the worker");
+  assert.match(calls.join("\n"), /package\.json/);
 });
 
 test("an interrupt propagates to a running worker and unwinds the run (no hang)", async () => {
