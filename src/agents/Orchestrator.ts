@@ -58,16 +58,20 @@ When your task is complete AND verified, call open_pr with a clear summary that 
 
 const CRITIC_ROLE = (target: string) => `You are an INDEPENDENT, adversarial code reviewer for worker "${target}". You did NOT write this code.
 Read the worker's changes (git_diff, read_file_range) and hunt for REAL problems: bugs, regressions, unhandled cases, missing or fake verification, security issues, scope drift, or claims not backed by evidence. Assume there IS a problem and try to prove it; cite concrete evidence (file:line + the actual code). Do not nitpick style.
+Be quick: read only what you need (a few files at most), then deliver your verdict. Do NOT make multi-step plans or do deep external research — you are a reviewer, not a builder.
 End your reply with exactly one line "VERDICT: approve" or "VERDICT: request_changes", then a short numbered list of the concrete must-fix issues (empty if approve).`;
 
 const PROPOSER_ROLE = (angle: string) => `You are a design proposer. Read the relevant code (read_file_range, search_text, get_file_overview) and propose a CONCRETE design for the task, optimized for: ${angle}.
-Be specific — name files, structure, key interfaces/data shapes — and cite evidence from the codebase. Note trade-offs honestly. Be concise (no code dumps).`;
+Be specific — name files, structure, key interfaces/data shapes — and cite evidence from the codebase. Note trade-offs honestly. Be concise (no code dumps).
+Be quick: a few targeted reads, then write your proposal. Do NOT make elaborate multi-step plans, do NOT do deep external/API research, and do NOT try to build anything — a design proposal should take only a handful of steps.`;
 
 const DESIGN_JUDGE_ROLE = `You are a NEUTRAL design judge. Several proposers gave designs for the same task.
-Choose the best overall design, or SYNTHESIZE the strongest combination, weighing evidence and trade-offs. Default to where proposers agree, but override with strong concrete evidence (guard against a misled consensus). Be decisive and specific so an implementer can follow it. End with a clear "CHOSEN DESIGN:" section listing the concrete approach + the sub-tasks it implies.`;
+Choose the best overall design, or SYNTHESIZE the strongest combination, weighing evidence and trade-offs. Default to where proposers agree, but override with strong concrete evidence (guard against a misled consensus). Be decisive and specific so an implementer can follow it.
+Decide from the proposals — you usually need little or no extra reading. Do NOT make plans or build anything. End with a clear "CHOSEN DESIGN:" section listing the concrete approach + the sub-tasks it implies.`;
 
 const JUDGE_ROLE = `You are a NEUTRAL judge. Several independent reviewers gave verdicts on a PR.
 Decide APPROVE or REQUEST_CHANGES. Default to the MAJORITY verdict — BUT weigh the EVIDENCE: if a minority cites decisively stronger, concrete evidence of a real defect, side with them. Explicitly guard against a misled majority (do not just count votes).
+Decide from the reviewers' verdicts — you usually need little or no extra reading. Do NOT make plans or build anything.
 Justify briefly citing the strongest evidence. End with exactly one line "DECISION: approve" or "DECISION: request_changes", then the consolidated must-fix issues.`;
 
 export type OrchestratorResult = { report: string; integrationBranch: string; diff: string; ephemeral: boolean; applied: boolean };
@@ -335,15 +339,19 @@ export class Orchestrator {
     // shell commands itself, so workers are the only agents that touch files.
     // Strip every workspace-mutating / shell tool from its registry (derived
     // from TOOL_EFFECTS so new tools are classified automatically).
+    // Discussants (critic/proposer/judge) are even tighter: PURE read-only tools
+    // only — no update_plan/remember/ask_user churn, so they read a little and
+    // give a verdict instead of building elaborate multi-step plans.
     const mutating = (name: string) => TOOL_EFFECTS[name]?.modifiesWorkspace || TOOL_EFFECTS[name]?.isShell;
-    const stripMutating = opts.isOrchestrator || Boolean(opts.readOnly);
-    const allowedNames = stripMutating ? LOCAL_TOOL_NAMES.filter((n) => !mutating(n)) : LOCAL_TOOL_NAMES;
+    const pureRead = (name: string) => TOOL_EFFECTS[name]?.readOnly === true;
+    const allowed = opts.readOnly ? pureRead : opts.isOrchestrator ? (n: string) => !mutating(n) : () => true;
+    const allowedNames = LOCAL_TOOL_NAMES.filter(allowed);
     const toolSkills = new ToolSkillRegistry(opts.root);
     toolSkills.loadBuiltin(allowedNames);
     const fullTools = createLocalToolRegistry(toolSkills);
     const tools = new ToolRegistry();
     for (const tool of fullTools.list()) {
-      if (stripMutating && mutating(tool.name)) continue;
+      if (!allowed(tool.name)) continue;
       tools.register(tool);
     }
     for (const tool of opts.extraTools(toolSkills)) tools.register(tool);
@@ -384,7 +392,7 @@ export class Orchestrator {
     const config: GrokCodeConfig = {
       ...this.config,
       workspaceRoot: opts.root,
-      maxSteps: opts.isOrchestrator ? this.config.maxSteps : Math.min(this.config.maxSteps, 30)
+      maxSteps: opts.isOrchestrator ? this.config.maxSteps : Math.min(this.config.maxSteps, opts.readOnly ? 12 : 30)
     };
     const events = this.eventSinkFactory(opts.agentId, !opts.isOrchestrator);
     const interjections = opts.isOrchestrator ? this.interjections : undefined;
