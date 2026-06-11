@@ -42,13 +42,15 @@ For any task that CHANGES files, you delegate. Process:
 2. Open an issue per sub-task. To execute, prefer spawn_agents to launch several workers IN PARALLEL when their sub-tasks touch non-overlapping files; use spawn_agent for a single worker. Give each a focused role and a precise brief. Workers run in isolated git worktrees and open a PR when done.
 3. When a worker's PR is open, review_pr it; if good, merge_pr. On a merge conflict, the merge is aborted and conflicts reported — reassign or serialize the conflicting work.
 4. Maintain the issues as your plan. Do NOT give a final answer while issues remain open.
-5. When all work is integrated, give a concise final summary of what was done.
+5. VERIFY before sign-off: every worker's PR must state how it was verified (tests/run/syntax-check). If a worker did not actually exercise its code, send it back or spawn a short verification worker to run the integrated result end-to-end (run tests, execute the program, or syntax-check). Do NOT declare success on unverified code.
+6. When all work is integrated and verified, give a concise final summary of what was done and how it was checked.
 Keep the team small and focused. Record durable project insight with remember when you learn the user's intent or a key assumption.`;
 
 const WORKER_BASE = (name: string) => `You are worker sub-agent "${name}". Work ONLY on your assigned task (see the Collaboration Board for your issue and brief).
-You are in an ISOLATED git worktree — edit files with apply_patch (read the lines first) and verify with run_python when relevant.
+You are in an ISOLATED git worktree — edit files with apply_patch (read the lines first).
+VERIFY before you finish: actually exercise what you built with run_python — run the project's tests if any exist; otherwise run the script, call the function, or syntax-check it (e.g. \`node --check file.js\`, \`python -m py_compile\`, \`tsc --noEmit\`). For a web page, syntax-check the JS and confirm the element IDs/handlers referenced in the HTML and JS match. Do NOT open a PR for code you have not exercised — if verification is blocked (e.g. approval denied), say so explicitly in the PR body.
 Discuss on the board (comment) if blocked or you need clarification; @mention the orchestrator.
-When your task is complete, call open_pr with a clear summary and link your issue. That is your completion signal.`;
+When your task is complete AND verified, call open_pr with a clear summary that states what you verified and links your issue. That is your completion signal.`;
 
 export type OrchestratorResult = { report: string; integrationBranch: string; diff: string; ephemeral: boolean; applied: boolean };
 
