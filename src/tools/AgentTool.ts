@@ -39,6 +39,8 @@ export type ToolExecutionContext = {
   agentId?: string;
   /** Run a worker sub-agent (orchestrator only). */
   spawnWorker?: SpawnWorker;
+  /** Mailbox for images a tool wants the model to SEE; the loop attaches them to the next turn. */
+  images?: Array<{ dataUri: string; note?: string }>;
 };
 
 export type ToolExecutor<TArgs = unknown, TResult = unknown> = (

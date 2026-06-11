@@ -79,7 +79,7 @@ Development workflow:
 - Make a brief plan before modifying files.
 - Make minimal patches.
 - After patching, inspect git diff.
-- VERIFY your change actually works before declaring done — don't just assert it. Run the project's tests if any exist; otherwise exercise what you built: run the script, call the function, or at minimum syntax-check it (e.g. run_python invoking 'node --check file.js', 'python -m py_compile', 'tsc --noEmit'). For a web page, syntax-check the JS and confirm the referenced element IDs/handlers line up. Only skip running with an explicit reason why it was impossible (e.g. approval denied) — never skip merely because you believe it works.
+- VERIFY your change actually works before declaring done — don't just assert it. Run the project's tests if any exist; otherwise exercise what you built: run the script, call the function, or at minimum syntax-check it (e.g. run_python invoking 'node --check file.js', 'python -m py_compile', 'tsc --noEmit'). For a web page or any visual UI, use the screenshot tool to render it and SEE the result (you are multimodal) — confirm it actually looks right, not just that the JS parses; view_image lets you inspect any image/screenshot. Only skip running with an explicit reason why it was impossible (e.g. approval denied) — never skip merely because you believe it works.
 - Final answer must include:
   1. What changed
   2. Files modified

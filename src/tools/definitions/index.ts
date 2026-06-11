@@ -16,6 +16,8 @@ import { createSkillTool } from "./createSkill.js";
 import { applyPatchTool } from "./applyPatch.js";
 import { runPythonTool } from "./runPython.js";
 import { updatePlanTool } from "./updatePlan.js";
+import { viewImageTool } from "./viewImage.js";
+import { screenshotTool } from "./screenshot.js";
 import { rememberTool, forgetTool } from "./projectMemory.js";
 import { noteUserLevelTool } from "./userProfile.js";
 import { askUserTool } from "./askUser.js";
@@ -45,6 +47,8 @@ export const LOCAL_TOOL_NAMES = [
   "note_user_level",
   "ask_user",
   "update_plan",
+  "view_image",
+  "screenshot",
   "apply_patch",
   "run_python",
   "git_status",
@@ -77,6 +81,8 @@ export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry
     noteUserLevelTool(skills),
     askUserTool(skills),
     updatePlanTool(skills),
+    viewImageTool(skills),
+    screenshotTool(skills),
     applyPatchTool(skills),
     runPythonTool(skills),
     gitStatusTool(skills),

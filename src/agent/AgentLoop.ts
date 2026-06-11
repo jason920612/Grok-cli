@@ -191,6 +191,15 @@ export class AgentLoop {
       const out = await executor.executeOne(call, state.step, signal);
       messages.push({ role: "tool", toolCallId: call.id, content: out.output });
 
+      // A tool (view_image / screenshot) may have produced images for the model
+      // to SEE — attach each as an image-bearing user message for the next turn.
+      const pendingImages = this.toolCtx.images;
+      if (pendingImages && pendingImages.length > 0) {
+        for (const img of pendingImages.splice(0)) {
+          messages.push({ role: "user", content: `[Image${img.note ? `: ${img.note}` : ""}]`, images: [img.dataUri] });
+        }
+      }
+
       // Surface files the agent looks at, so the UI can show their contents.
       if (call.name === "read_file_range" || call.name === "get_file_overview") {
         try {

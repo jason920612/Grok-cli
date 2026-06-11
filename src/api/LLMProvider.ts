@@ -12,7 +12,7 @@
  */
 
 export type ModelMessage =
-  | { role: "system" | "user" | "assistant"; content: string }
+  | { role: "system" | "user" | "assistant"; content: string; images?: string[] }
   | { role: "tool_call"; toolCallId: string; name: string; argsJson: string }
   | { role: "tool"; toolCallId: string; content: string };
 

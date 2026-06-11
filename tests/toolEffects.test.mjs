@@ -17,6 +17,7 @@ const HISTORICAL_READ_ONLY = new Set([
   "find_symbol",
   "get_related_files",
   "expand_node",
+  "view_image",
   "git_status",
   "git_diff",
   "list_background_commands",
@@ -42,7 +43,7 @@ test("readOnly classification matches the historical read-only set exactly", () 
 
 test("shell-like tools (exit-code semantics) are the shell + python executors", () => {
   const shellTools = LOCAL_TOOL_NAMES.filter((name) => TOOL_EFFECTS[name].isShell);
-  assert.deepEqual(shellTools.sort(), ["run_python", "start_background_command"].sort());
+  assert.deepEqual(shellTools.sort(), ["run_python", "screenshot", "start_background_command"].sort());
 });
 
 test("only apply_patch is marked as modifying the workspace", () => {

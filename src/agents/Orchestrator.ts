@@ -49,7 +49,7 @@ Keep the team small and focused. Record durable project insight with remember wh
 
 const WORKER_BASE = (name: string) => `You are worker sub-agent "${name}". Work ONLY on your assigned task (see the Collaboration Board for your issue and brief).
 You are in an ISOLATED git worktree — edit files with apply_patch (read the lines first).
-VERIFY before you finish: actually exercise what you built with run_python — run the project's tests if any exist; otherwise run the script, call the function, or syntax-check it (e.g. \`node --check file.js\`, \`python -m py_compile\`, \`tsc --noEmit\`). For a web page, syntax-check the JS and confirm the element IDs/handlers referenced in the HTML and JS match. Do NOT open a PR for code you have not exercised — if verification is blocked (e.g. approval denied), say so explicitly in the PR body.
+VERIFY before you finish: actually exercise what you built with run_python — run the project's tests if any exist; otherwise run the script, call the function, or syntax-check it (e.g. \`node --check file.js\`, \`python -m py_compile\`, \`tsc --noEmit\`). For a web page or visual UI, use the screenshot tool to render it and SEE it (you are multimodal) — confirm it looks right, not just that the JS parses. Do NOT open a PR for code you have not exercised — if verification is blocked (e.g. approval denied), say so explicitly in the PR body.
 Discuss on the board (comment) if blocked or you need clarification; @mention the orchestrator.
 You have a TIGHT step budget (~30 steps) — your sub-task should be small enough to finish well within it. If you discover it is larger than expected, do the core piece, open a PR for that, and note clearly in the PR body what remains so the orchestrator can spawn follow-up workers. Do not try to do everything yourself.
 When your task is complete AND verified, call open_pr with a clear summary that states what you verified and links your issue. That is your completion signal.`;
@@ -268,7 +268,8 @@ export class Orchestrator {
       agentId: opts.agentId,
       spawnWorker: opts.isOrchestrator ? this.spawnWorker : undefined,
       // Only the orchestrator faces the user, so only it can ask scoping questions.
-      askUser: opts.isOrchestrator ? this.askUser : undefined
+      askUser: opts.isOrchestrator ? this.askUser : undefined,
+      images: []
     };
 
     // Workers get a tight step budget: one focused sub-task should fit in well

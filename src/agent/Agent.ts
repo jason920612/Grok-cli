@@ -79,6 +79,7 @@ export class Agent {
       memory: this.memory,
       userProfile: this.userProfile,
       askUser: this.askUser,
+      images: [],
       round: () => ++this.round
     };
   }

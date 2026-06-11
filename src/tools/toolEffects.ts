@@ -21,6 +21,7 @@ export const TOOL_EFFECTS: Record<string, ToolEffects> = {
   find_symbol: ro(),
   get_related_files: ro(),
   expand_node: ro(),
+  view_image: ro(),
   git_status: ro(),
   git_diff: ro(),
   list_background_commands: ro(),
@@ -34,6 +35,7 @@ export const TOOL_EFFECTS: Record<string, ToolEffects> = {
   ask_user: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },
   update_plan: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },
   run_python: { readOnly: false, modifiesWorkspace: false, isShell: true, countsAsProgress: false },
+  screenshot: { readOnly: false, modifiesWorkspace: false, isShell: true, countsAsProgress: false },
   start_background_command: { readOnly: false, modifiesWorkspace: false, isShell: true, countsAsProgress: false },
   stop_background_command: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },
   stop_all_background_commands: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true }

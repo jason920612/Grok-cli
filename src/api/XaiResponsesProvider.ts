@@ -103,6 +103,16 @@ function toInputItem(message: ModelMessage): Record<string, unknown> {
   if (message.role === "tool_call") {
     return { type: "function_call", call_id: message.toolCallId, name: message.name, arguments: message.argsJson };
   }
+  // Multimodal: attach images as Responses-API content parts alongside the text.
+  if (message.images && message.images.length > 0) {
+    return {
+      role: message.role,
+      content: [
+        { type: "input_text", text: message.content },
+        ...message.images.map((image_url) => ({ type: "input_image", image_url }))
+      ]
+    };
+  }
   return { role: message.role, content: message.content };
 }
 
