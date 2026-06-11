@@ -68,6 +68,7 @@ export class Orchestrator {
   private readonly memory: ProjectMemory;
   private spawnCount = 0;
   private setupDone = false;
+  private runSignal?: AbortSignal;
 
   private readonly applyToWorkingTree: boolean;
   private readonly usage?: SessionUsage;
@@ -110,6 +111,9 @@ export class Orchestrator {
   }
 
   async run(task: string, signal?: AbortSignal): Promise<OrchestratorResult> {
+    // Remember the run's signal so spawned workers receive it too — otherwise an
+    // interrupt (web Stop / Esc) aborts only the orchestrator while workers grind on.
+    this.runSignal = signal;
     // Non-git workspace: set up a throwaway git repo behind the scenes; the
     // integrated result is applied to the working tree and git is removed after,
     // so the user never sees git was used.
@@ -175,7 +179,17 @@ export class Orchestrator {
       isOrchestrator: false,
       extraTools: (s) => [openPrTool(s), commentTool(s), openIssueTool(s), sendDmTool(s)]
     });
-    const summary = await loop.run(spec.brief, true);
+    let summary: string;
+    try {
+      summary = await loop.run(spec.brief, true, this.runSignal);
+    } catch (error) {
+      // Settle (don't reject) so a sibling worker's rejection in Promise.all
+      // can't become an unhandled rejection; the orchestrator's own abort check
+      // unwinds the run. On interrupt, skip opening a PR for partial work.
+      const message = error instanceof Error ? error.message : String(error);
+      if (/interrupt|abort/i.test(message)) return { summary: `Worker "${spec.name}" interrupted.` };
+      return { summary: `Worker "${spec.name}" failed: ${message}` };
+    }
 
     // Ensure the work is captured as a PR even if the worker forgot to open one.
     let pr = [...this.board.prs.values()].find((p) => p.author === spec.name && p.status === "open");

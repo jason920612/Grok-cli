@@ -122,6 +122,29 @@ test("orchestrator's ask_user reaches the interactive askUser hook", async () =>
   assert.equal(asked[0].question, "Which framework?");
 });
 
+test("an interrupt propagates to a running worker and unwinds the run (no hang)", async () => {
+  const root = gitRepo();
+  const controller = new AbortController();
+  let calls = 0;
+  const provider = {
+    id: "fake",
+    capabilities: { serverTools: [], promptCaching: true },
+    async complete(req) {
+      calls++;
+      const blob = req.messages.map((m) => ("content" in m ? m.content : "")).join("\n");
+      if (blob.includes('sub-agent "w1"')) {
+        // Worker's turn — simulate the user hitting Stop mid-worker.
+        controller.abort();
+        return toResult(text("working on it"));
+      }
+      if (calls === 1) return toResult(fnCall("spawn_agent", { name: "w1", role: "do it", brief: "do the thing" }));
+      return toResult(text("done"));
+    }
+  };
+  const orch = new Orchestrator(provider, config(root), "int-run", "task");
+  await assert.rejects(() => orch.run("task", controller.signal), /interrupt/i);
+});
+
 function routedProvider(queues) {
   const q = Object.fromEntries(Object.entries(queues).map(([k, v]) => [k, [...v]]));
   return {
