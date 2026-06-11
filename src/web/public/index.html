@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>grok-code</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2330; --border: #30363d;
+    --text: #e6edf3; --dim: #8b949e; --accent: #58a6ff; --green: #3fb950;
+    --red: #f85149; --yellow: #d29922; --magenta: #bc8cff;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text); font: 14px/1.55 -apple-system, "Segoe UI", system-ui, sans-serif;
+    display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+  }
+  code, pre, .mono { font-family: "SF Mono", "Cascadia Code", Consolas, monospace; }
+
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0;
+  }
+  header .brand { font-weight: 700; color: var(--accent); }
+  header .meta { color: var(--dim); font-size: 12px; }
+  header .spacer { flex: 1; }
+  .toggle {
+    cursor: pointer; user-select: none; border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 10px; font-size: 12px; color: var(--dim); background: var(--panel2);
+  }
+  .toggle.on { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .toggle.yes.on { background: var(--green); border-color: var(--green); }
+  #usage { color: var(--dim); font-size: 12px; }
+
+  main { flex: 1; display: flex; min-height: 0; }
+  #chat { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  #side {
+    width: 340px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--panel);
+    overflow-y: auto; padding: 12px; font-size: 12px;
+  }
+  #side h3 { margin: 4px 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
+  .act { padding: 2px 0; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+  .act .who { font-weight: 600; }
+  .act.worker { padding-left: 12px; color: var(--dim); }
+  .act.warn { color: var(--yellow); } .act.verifier { color: var(--magenta); }
+
+  .msg { max-width: 80%; padding: 9px 13px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: #1f6feb33; border: 1px solid #1f6feb55; }
+  .msg.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--border); }
+  .msg.system { align-self: center; background: transparent; color: var(--dim); font-size: 12px; padding: 2px; }
+  .msg.error { align-self: center; color: var(--red); border: 1px solid var(--red); background: #f8514916; }
+
+  .card { align-self: flex-start; max-width: 88%; border: 1px solid var(--border); border-radius: 10px; background: var(--panel2); overflow: hidden; }
+  .card .chead { padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--border); }
+  .card.approval .chead { color: var(--yellow); }
+  .card.ask .chead { color: var(--accent); }
+  .card .cbody { padding: 10px 12px; }
+  .card .kv { color: var(--dim); font-size: 12px; margin: 2px 0; }
+  .card .kv b { color: var(--text); font-weight: 600; }
+  .btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  button.act-btn {
+    cursor: pointer; border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px;
+    background: var(--panel); color: var(--text); font-size: 13px;
+  }
+  button.act-btn:hover { border-color: var(--accent); }
+  button.act-btn.primary { background: var(--green); border-color: var(--green); color: #07140a; font-weight: 600; }
+  button.act-btn.danger { background: var(--red); border-color: var(--red); color: #1a0606; font-weight: 600; }
+  .card.resolved { opacity: .5; }
+  .card input[type=text] {
+    width: 100%; margin-top: 6px; padding: 6px 8px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 13px;
+  }
+
+  .filecard { align-self: stretch; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
+  .filecard .fhead { cursor: pointer; user-select: none; padding: 7px 12px; display: flex; align-items: center; gap: 8px; }
+  .filecard .fhead:hover { background: var(--panel2); }
+  .filecard .caret { color: var(--dim); width: 10px; }
+  .filecard .stat { color: var(--dim); font-size: 12px; margin-left: auto; }
+  .filecard .add { color: var(--green); } .filecard .del { color: var(--red); }
+  .filecard pre { margin: 0; padding: 10px 12px; border-top: 1px solid var(--border); overflow-x: auto; font-size: 12.5px; background: #0a0e14; }
+  .dl-add { color: var(--green); } .dl-del { color: var(--red); } .dl-hunk { color: var(--accent); } .dl-ctx { color: var(--dim); }
+
+  footer { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--panel); padding: 10px 14px; display: flex; gap: 10px; align-items: flex-end; }
+  #input { flex: 1; resize: none; min-height: 22px; max-height: 160px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; font: inherit; }
+  #input:focus { outline: none; border-color: var(--accent); }
+  footer button { cursor: pointer; border: none; border-radius: 8px; padding: 9px 16px; font-weight: 600; }
+  #send { background: var(--accent); color: var(--bg); }
+  #stop { background: var(--red); color: var(--bg); display: none; }
+  body.running #stop { display: inline-block; }
+  .hint { color: var(--dim); font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">grok-code</span>
+  <span class="meta" id="meta">connecting…</span>
+  <span class="spacer"></span>
+  <span id="usage"></span>
+  <span class="toggle agents" id="t-agents" title="Multi-agent mode">⚡ multi-agent</span>
+  <span class="toggle yes" id="t-yes" title="Always approve (destructive still blocked)">✓ auto-approve</span>
+</header>
+<main>
+  <div id="chat"></div>
+  <div id="side"><h3>Activity</h3><div id="acts"></div></div>
+</main>
+<footer>
+  <textarea id="input" rows="1" placeholder="Message grok-code…  (Enter to send, Shift+Enter for newline. You can also type while it works to interject.)"></textarea>
+  <button id="send">Send</button>
+  <button id="stop">⏹ Stop</button>
+</footer>
+<script>
+const token = new URLSearchParams(location.search).get("t") || "";
+const q = (p, b) => fetch(p + "?t=" + token, b && { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
+const chat = document.getElementById("chat");
+const acts = document.getElementById("acts");
+const input = document.getElementById("input");
+const elMeta = document.getElementById("meta");
+const elUsage = document.getElementById("usage");
+const tAgents = document.getElementById("t-agents");
+const tYes = document.getElementById("t-yes");
+
+function atBottom() { return chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80; }
+function scroll() { chat.scrollTop = chat.scrollHeight; }
+
+// Minimal, safe markdown: escape first, then a few inline/block patterns.
+function esc(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function md(s) {
+  const parts = esc(s).split(/(```[\s\S]*?```)/g);
+  return parts.map((p) => {
+    if (p.startsWith("```")) return "<pre class=mono>" + p.replace(/^```[a-z]*\n?/i, "").replace(/```$/, "") + "</pre>";
+    return p
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/^### (.+)$/gm, "<b>$1</b>")
+      .replace(/^[-*] (.+)$/gm, "• $1")
+      .replace(/\n/g, "<br>");
+  }).join("");
+}
+
+function addMsg(role, text) {
+  const stick = atBottom();
+  const d = document.createElement("div");
+  d.className = "msg " + role;
+  d.innerHTML = role === "user" ? esc(text) : md(text);
+  chat.appendChild(d);
+  if (stick) scroll();
+}
+
+function colorDiff(body) {
+  return esc(body).split("\n").map((l) => {
+    if (l.startsWith("+") && !l.startsWith("+++")) return "<span class=dl-add>" + l + "</span>";
+    if (l.startsWith("-") && !l.startsWith("---")) return "<span class=dl-del>" + l + "</span>";
+    if (l.startsWith("@@")) return "<span class=dl-hunk>" + l + "</span>";
+    return "<span class=dl-ctx>" + l + "</span>";
+  }).join("\n");
+}
+
+function addChanges(files) {
+  const stick = atBottom();
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant";
+  wrap.style.maxWidth = "92%";
+  wrap.innerHTML = "<b>Changed " + files.length + " file(s)</b> <span class=hint>(click a file to expand its diff)</span>";
+  for (const f of files) {
+    const card = document.createElement("div");
+    card.className = "filecard";
+    card.style.marginTop = "8px";
+    const head = document.createElement("div");
+    head.className = "fhead";
+    head.innerHTML = "<span class=caret>▶</span><b class=mono>" + esc(f.status + " " + f.path) +
+      "</b><span class=stat><span class=add>+" + f.additions + "</span>/<span class=del>-" + f.deletions + "</span></span>";
+    const pre = document.createElement("pre");
+    pre.className = "mono";
+    pre.style.display = "none";
+    pre.innerHTML = colorDiff(f.body);
+    head.onclick = () => {
+      const open = pre.style.display === "none";
+      pre.style.display = open ? "block" : "none";
+      head.querySelector(".caret").textContent = open ? "▼" : "▶";
+    };
+    card.appendChild(head); card.appendChild(pre); wrap.appendChild(card);
+  }
+  chat.appendChild(wrap);
+  if (stick) scroll();
+}
+
+function addRequest(ev) {
+  const stick = atBottom();
+  const card = document.createElement("div");
+  card.className = "card " + (ev.kind === "approval" ? "approval" : "ask");
+  card.dataset.id = ev.id;
+  if (ev.kind === "approval") {
+    const p = ev.payload;
+    card.innerHTML =
+      "<div class=chead>⚠ Approval required</div><div class=cbody>" +
+      "<div class=kv><b>Operation:</b> " + esc(p.operation || "") + "</div>" +
+      "<div class=kv><b>Request:</b> <span class=mono>" + esc(p.command || "") + "</span></div>" +
+      "<div class=kv><b>Reason:</b> " + esc(p.reason || "") + "</div>" +
+      "<div class=kv><b>Risk:</b> " + esc(p.risk || "") + "</div></div>";
+    const body = card.querySelector(".cbody");
+    const row = document.createElement("div"); row.className = "btnrow";
+    const mk = (label, cls, fn) => { const b = document.createElement("button"); b.className = "act-btn " + cls; b.textContent = label; b.onclick = fn; return b; };
+    row.appendChild(mk("Allow once", "primary", () => respond(ev.id, { approved: true, rememberSimilar: false })));
+    row.appendChild(mk("Allow & remember", "", () => respond(ev.id, { approved: true, rememberSimilar: true })));
+    row.appendChild(mk("Deny", "danger", () => respond(ev.id, { approved: false })));
+    body.appendChild(row);
+  } else {
+    const qs = ev.payload.questions || [];
+    let html = "<div class=chead>❓ A few questions</div><div class=cbody>";
+    qs.forEach((q, i) => { html += "<div class=kv style='color:var(--text);margin-top:8px'>" + esc(q.question) + "</div><div class=btnrow data-qi=" + i + "></div><input type=text data-free=" + i + " placeholder='or type your own…'>"; });
+    html += "</div>";
+    card.innerHTML = html;
+    qs.forEach((q, i) => {
+      const row = card.querySelector("[data-qi='" + i + "']");
+      (q.options || []).forEach((opt) => {
+        const b = document.createElement("button"); b.className = "act-btn"; b.textContent = opt;
+        b.onclick = () => { card.querySelector("[data-free='" + i + "']").value = opt; b.classList.add("primary"); };
+        row.appendChild(b);
+      });
+    });
+    const submit = document.createElement("button"); submit.className = "act-btn primary"; submit.textContent = "Submit answers"; submit.style.marginTop = "10px";
+    submit.onclick = () => {
+      const answers = qs.map((q, i) => ({ answer: card.querySelector("[data-free='" + i + "']").value }));
+      respond(ev.id, { answers });
+    };
+    card.querySelector(".cbody").appendChild(submit);
+  }
+  chat.appendChild(card);
+  if (stick) scroll();
+}
+
+function respond(id, body) {
+  q("/api/respond", { id, ...body });
+  const card = chat.querySelector(".card[data-id='" + id + "']");
+  if (card) { card.classList.add("resolved"); card.querySelectorAll("button,input").forEach((b) => (b.disabled = true)); }
+}
+
+function addAct(ev) {
+  const stick = chat; // activity panel scrolls itself
+  const d = document.createElement("div");
+  const worker = ev.agent.startsWith("worker:");
+  d.className = "act " + (worker ? "worker " : "") + (ev.kind === "warn" ? "warn " : ev.kind === "verifier" ? "verifier" : "");
+  d.innerHTML = "<span class=who>[" + esc(ev.agent) + "]</span> " + esc(ev.message);
+  acts.appendChild(d);
+  acts.scrollTop = acts.scrollHeight;
+  while (acts.children.length > 400) acts.removeChild(acts.firstChild);
+}
+
+function setMode(agents, yes) {
+  tAgents.classList.toggle("on", agents);
+  tYes.classList.toggle("on", yes);
+}
+
+function handle(ev) {
+  switch (ev.type) {
+    case "chat": addMsg(ev.role, ev.text); break;
+    case "activity": addAct(ev); break;
+    case "request": addRequest(ev); break;
+    case "request_resolved": { const c = chat.querySelector(".card[data-id='" + ev.id + "']"); if (c) { c.classList.add("resolved"); c.querySelectorAll("button,input").forEach((b) => (b.disabled = true)); } break; }
+    case "task": document.body.classList.toggle("running", ev.status === "running");
+      if (ev.status === "error") addMsg("error", "Error: " + (ev.message || "")); break;
+    case "changes": addChanges(ev.files); break;
+    case "usage": elUsage.textContent = ev.line; break;
+    case "mode": setMode(ev.agents, ev.yes); break;
+  }
+}
+
+async function init() {
+  const st = await (await q("/api/state")).json();
+  elMeta.textContent = st.model + " · " + st.workspace;
+  setMode(st.agents, st.yes);
+  if (st.usage) elUsage.textContent = st.usage;
+  const es = new EventSource("/api/events?t=" + token);
+  es.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch {} };
+}
+
+function send() {
+  const text = input.value.trim();
+  if (!text) return;
+  q("/api/message", { text });
+  input.value = ""; input.style.height = "auto";
+}
+input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(160, input.scrollHeight) + "px"; });
+input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } });
+document.getElementById("send").onclick = send;
+document.getElementById("stop").onclick = () => q("/api/interrupt", {});
+tAgents.onclick = () => q("/api/toggle", { agents: !tAgents.classList.contains("on") });
+tYes.onclick = () => q("/api/toggle", { yes: !tYes.classList.contains("on") });
+init();
+</script>
+</body>
+</html>

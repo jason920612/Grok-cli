@@ -9,3 +9,4 @@ dist/
 .grok-code/user-profile.json
 coverage/
 *.log
+scripts/screenshots/

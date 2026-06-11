@@ -15,7 +15,8 @@ import type { AgentTool, ToolExecutionContext, SpawnWorker } from "../tools/Agen
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { scanRepo } from "../workspace/RepoScanner.js";
 import { AgentLoop } from "../agent/AgentLoop.js";
-import { LabeledEventSink } from "../agent/AgentEvents.js";
+import { LabeledEventSink, type AgentEventSink } from "../agent/AgentEvents.js";
+import type { ApprovalPrompter } from "../approval/ApprovalPolicy.js";
 import type { SessionUsage } from "../agent/SessionUsage.js";
 import type { Interjections } from "../agent/Interjections.js";
 import { Board } from "./Board.js";
@@ -70,6 +71,7 @@ export class Orchestrator {
   private readonly usage?: SessionUsage;
   private readonly interjections?: Interjections;
   private readonly askUser?: ToolExecutionContext["askUser"];
+  private readonly eventSinkFactory: (label: string, isWorker: boolean) => AgentEventSink;
 
   constructor(
     private readonly provider: LLMProvider,
@@ -81,6 +83,8 @@ export class Orchestrator {
       usage?: SessionUsage;
       interjections?: Interjections;
       askUser?: ToolExecutionContext["askUser"];
+      approvalPrompter?: ApprovalPrompter;
+      eventSinkFactory?: (label: string, isWorker: boolean) => AgentEventSink;
     } = {}
   ) {
     this.git = new GitService(config.workspaceRoot, runId);
@@ -97,6 +101,10 @@ export class Orchestrator {
     // The orchestrator is the user-facing agent, so it (and only it) can ask the
     // user scoping questions via ask_user.
     this.askUser = opts.askUser;
+    // Web mode routes approval questions to the browser.
+    if (opts.approvalPrompter) this.approval.prompter = opts.approvalPrompter;
+    // Web mode streams agent activity to the browser instead of the console.
+    this.eventSinkFactory = opts.eventSinkFactory ?? ((label, isWorker) => new LabeledEventSink(label, isWorker));
   }
 
   async run(task: string, signal?: AbortSignal): Promise<OrchestratorResult> {
@@ -237,7 +245,7 @@ export class Orchestrator {
     };
 
     const config: GrokCodeConfig = { ...this.config, workspaceRoot: opts.root };
-    const events = new LabeledEventSink(opts.agentId, !opts.isOrchestrator);
+    const events = this.eventSinkFactory(opts.agentId, !opts.isOrchestrator);
     const interjections = opts.isOrchestrator ? this.interjections : undefined;
     return new AgentLoop(this.provider, config, context, tools, toolCtx, skillLoader, toolSkills, opts.role, events, this.usage, opts.agentId, interjections);
   }

@@ -48,6 +48,8 @@ type CliOpts = {
   verifier?: boolean;
   agents?: boolean;
   yes?: boolean;
+  tui?: boolean;
+  open?: boolean;
 };
 
 /** `--yes` forces always-approve (auto-all), unless an explicit --approval was given. */
@@ -75,7 +77,9 @@ export async function main(): Promise<void> {
     .option("--conversation-mode <mode>", "stateful|stateless|hybrid", "stateless")
     .option("--verifier", "Enable independent verifier agent after each final answer")
     .option("--no-agents", "Disable multi-agent mode and use a single agent (multi-agent is the default for one-shot tasks)")
-    .option("--yes", "Always approve: auto-approve every prompt (destructive commands are still blocked)");
+    .option("--yes", "Always approve: auto-approve every prompt (destructive commands are still blocked)")
+    .option("--tui", "Use the terminal interface instead of the default web UI")
+    .option("--no-open", "Do not auto-open the browser for the web UI (just print the URL)");
 
   program.command("ask <question...>").description("Ask a question").action(async (question: string[]) => runOne(question.join(" "), program.opts<CliOpts>(), "ask"));
   program.command("edit <task...>").description("Run an edit task").action(async (task: string[]) => runOne(task.join(" "), program.opts<CliOpts>(), "edit"));
@@ -223,6 +227,30 @@ async function runInteractive(opts: CliOpts): Promise<void> {
     console.log(chalk.yellow("Workspace not trusted — interactive session cancelled. Run grok-code again to retry."));
     return;
   }
+  if (opts.tui) return runInteractiveTui(opts);
+  return runInteractiveWeb(opts);
+}
+
+async function runInteractiveWeb(opts: CliOpts): Promise<void> {
+  const { startWebServer } = await import("./web/server.js");
+  const agent = await makeAgent(opts, "interactive session");
+  const server = await startWebServer({
+    agent,
+    multiAgentDefault: opts.agents !== false && isGitAvailable(),
+    openBrowser: opts.open !== false
+  });
+  console.log(chalk.bold.cyan("grok-code") + chalk.dim(" web UI running at:"));
+  console.log("  " + chalk.underline(server.url));
+  console.log(chalk.dim(opts.open !== false ? "Opening your browser… (Ctrl+C here to stop the server)" : "Open the URL above. (Ctrl+C here to stop the server)"));
+  await new Promise<void>((resolve) => {
+    process.on("SIGINT", () => resolve());
+  });
+  await server.close();
+  await agent.background.stopAll("web exit cleanup");
+  console.log(chalk.dim("\nServer stopped. Goodbye."));
+}
+
+async function runInteractiveTui(opts: CliOpts): Promise<void> {
   const agent = await makeAgent(opts, "interactive session");
   const finalAgent = await startRepl(agent, {
     // Multi-agent is the default in interactive mode too (parity with one-shot);

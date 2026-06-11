@@ -32,7 +32,7 @@ fs.writeFileSync(
   )
 );
 
-const term = pty.spawn(process.execPath, [entry], {
+const term = pty.spawn(process.execPath, [entry, "--tui"], {
   name: "xterm-color",
   cols: 100,
   rows: 30,

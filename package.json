@@ -9,7 +9,8 @@
   "files": [
     "dist",
     "src/skills/builtin",
-    "src/tool-skills/builtin"
+    "src/tool-skills/builtin",
+    "src/web/public"
   ],
   "scripts": {
     "build": "tsc",
@@ -17,7 +18,8 @@
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
-    "test:tui": "npm run build && node scripts/tui-pty-check.mjs"
+    "test:tui": "npm run build && node scripts/tui-pty-check.mjs",
+    "web:shots": "npm run build && node scripts/web-screenshot.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -38,6 +40,7 @@
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "@types/diff": "^7.0.1",
     "@types/node": "^22.13.5",
+    "playwright": "^1.60.0",
     "tsx": "^4.19.3",
     "typescript": "^5.7.3"
   }

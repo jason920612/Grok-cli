@@ -1,6 +1,14 @@
 import type { ApprovalMode } from "../config/loadConfig.js";
 import { classifyCommand, classifyPythonCode, type CommandRisk } from "./RiskClassifier.js";
-import { promptApproval } from "./promptApproval.js";
+import { promptApproval, type ApprovalPromptDecision, type ApprovalPromptDetails } from "./promptApproval.js";
+
+/** How approval questions reach the user. Terminal prompt by default; the web UI injects its own. */
+export type ApprovalPrompter = (
+  command: string,
+  reason: string,
+  risk: CommandRisk,
+  details: ApprovalPromptDetails
+) => Promise<ApprovalPromptDecision>;
 
 export type PatchApprovalMetadata = {
   files: Array<{
@@ -15,6 +23,8 @@ type PatchRisk = "safe" | "ask";
 
 export class ApprovalPolicy {
   private rememberedApprovals = new Set<string>();
+  /** Replaceable so the web UI can route approval questions to the browser. */
+  prompter: ApprovalPrompter = promptApproval;
 
   constructor(private currentMode: ApprovalMode, readonly originalTask = "") {}
 
@@ -50,7 +60,7 @@ export class ApprovalPolicy {
       return { approved: false, risk, message: "Approval policy is never." };
     }
     if (risk === "safe") return { approved: true, risk };
-    const decision = await promptApproval(command, reason, risk, {
+    const decision = await this.prompter(command, reason, risk, {
       operation: options.background ? "run background command" : "run shell command",
       policy: this.currentMode,
       scope: options.background ? "workspace background process" : "workspace shell",
@@ -78,7 +88,7 @@ export class ApprovalPolicy {
     if (this.currentMode === "auto-safe" && risk === "safe") return { approved: true, risk };
     if (this.currentMode === "never") return { approved: false, risk, message: "Approval policy is never." };
     if (risk === "safe") return { approved: true, risk };
-    const decision = await promptApproval(`run_python (${risk})`, reason, risk, {
+    const decision = await this.prompter(`run_python (${risk})`, reason, risk, {
       operation: "run Python code",
       policy: this.currentMode,
       scope: "workspace Python execution",
@@ -98,7 +108,7 @@ export class ApprovalPolicy {
     if (risk === "safe") return true;
     if (this.currentMode === "auto-safe") return false;
     if (this.currentMode === "auto-local" || this.currentMode === "auto-all") return true;
-    const decision = await promptApproval(formatPatchApprovalCommand(metadata!), reason, "ask", {
+    const decision = await this.prompter(formatPatchApprovalCommand(metadata!), reason, "ask", {
       operation: "apply workspace patch",
       policy: this.currentMode,
       scope: "workspace files",
