@@ -6,7 +6,7 @@ import { Orchestrator } from "../agents/Orchestrator.js";
 import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
 import { colorDiff } from "./diffView.js";
-import { readInteractiveLine, runWithEscInterrupt, type TranscriptEntry } from "./interactiveInput.js";
+import { ReplInput, type TranscriptEntry } from "./interactiveInput.js";
 import { visibleSlashCommands } from "./slashCommands.js";
 import type { ApprovalMode } from "../config/loadConfig.js";
 import { formatSessionStatus } from "./terminal.js";
@@ -40,13 +40,14 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
   attachAskUser(agent);
   const transcript: TranscriptEntry[] = [];
   const history: string[] = [];
+  const replInput = new ReplInput(history);
   let useAgents = options.multiAgentDefault ?? false;
 
   console.log(chalk.dim(`Type ${chalk.cyan("/help")} for commands, ${chalk.cyan("/exit")} to quit. Esc interrupts a running task.`));
   for (;;) {
     let line: string;
     try {
-      line = await readInteractiveLine(useAgents ? "grok-code ⚡" : "grok-code>", { history });
+      line = await replInput.readLine(useAgents ? "grok-code ⚡" : "grok-code>");
     } catch {
       break; // stdin closed
     }
@@ -65,7 +66,7 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
     }
 
     if (text.startsWith("/")) {
-      const nextAgent = await handleSlash(text, agent, options, (content) => remember(transcript, "system", content));
+      const nextAgent = await handleSlash(text, agent, options, replInput, (content) => remember(transcript, "system", content));
       if (nextAgent) {
         agent = nextAgent;
         attachAskUser(agent);
@@ -74,7 +75,7 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
     }
 
     try {
-      const response = await runWithEscInterrupt((signal) =>
+      const response = await replInput.runWithEscInterrupt((signal) =>
         useAgents ? runReplTeam(agent, text, signal) : agent.run(text, false, signal)
       );
       remember(transcript, "assistant", String(response));
@@ -87,6 +88,7 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
     }
   }
   console.log(chalk.dim("Goodbye."));
+  replInput.close();
   return agent;
 }
 
@@ -99,7 +101,7 @@ async function runReplTeam(agent: Agent, task: string, signal: AbortSignal): Pro
   return result.report;
 }
 
-async function handleSlash(command: string, agent: Agent, options: ReplOptions, emit: (content: string) => void): Promise<Agent | void> {
+async function handleSlash(command: string, agent: Agent, options: ReplOptions, replInput: ReplInput, emit: (content: string) => void): Promise<Agent | void> {
   const [name, ...rest] = command.split(/\s+/);
   const output = (content: string) => {
     emit(content);
@@ -150,7 +152,7 @@ async function handleSlash(command: string, agent: Agent, options: ReplOptions, 
       output(agent.context.compactContext("interactive session").content);
       break;
     case "/learn-project":
-      output(await runWithEscInterrupt((signal) => agent.run(PROJECT_UNDERSTANDING_TASK, false, signal)));
+      output(await replInput.runWithEscInterrupt((signal) => agent.run(PROJECT_UNDERSTANDING_TASK, false, signal)));
       break;
     case "/skills":
       output(formatSkills(agent));
