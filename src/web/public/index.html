@@ -153,6 +153,7 @@ const elMenu = document.getElementById("menu");
 const elAc = document.getElementById("ac");
 let COMMANDS = [];
 let CAN_CD = false;
+let CAN_MODEL = false;
 
 function atBottom() { return chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80; }
 function scroll() { chat.scrollTop = chat.scrollHeight; }
@@ -296,10 +297,33 @@ function addOutput(title, text) {
   if (stick) scroll();
 }
 
+function addTrust(ev) {
+  const stick = atBottom();
+  const card = document.createElement("div");
+  card.className = "card ask";
+  card.innerHTML = "<div class=chead>🔒 Workspace trust</div><div class=cbody>" +
+    "<div class=kv><b>Directory:</b> <span class=mono>" + esc(ev.workspace) + "</span></div>" +
+    "<div class=kv><b>Current:</b> " + esc(ev.current) + "</div></div>";
+  const body = card.querySelector(".cbody");
+  const row = document.createElement("div"); row.className = "btnrow";
+  const mk = (label, cls, action) => {
+    const b = document.createElement("button"); b.className = "act-btn " + cls; b.textContent = label;
+    b.onclick = () => { q("/api/trust", { action }); card.classList.add("resolved"); card.querySelectorAll("button").forEach((x) => (x.disabled = true)); };
+    return b;
+  };
+  row.appendChild(mk("Trust this directory only", "primary", "exact"));
+  row.appendChild(mk("Trust directory + subdirectories", "", "descendants"));
+  row.appendChild(mk("Clear trust", "danger", "clear"));
+  body.appendChild(row);
+  chat.appendChild(card);
+  if (stick) scroll();
+}
+
 function applyState(st) {
   elModel.textContent = st.model;
   elWs.textContent = st.workspace;
   CAN_CD = !!st.canSwitchWorkspace;
+  CAN_MODEL = !!st.canSwitchModel;
   if (Array.isArray(st.commands)) COMMANDS = st.commands;
   setMode(st.agents, st.yes);
   if (Array.isArray(st.approvalModes)) {
@@ -324,6 +348,7 @@ function handle(ev) {
     case "mode": setMode(ev.agents, ev.yes); break;
     case "output": addOutput(ev.title, ev.text); break;
     case "state": applyState(ev); break;
+    case "trust": addTrust(ev); break;
   }
 }
 
@@ -349,6 +374,8 @@ elCmds.onclick = (e) => {
 };
 document.addEventListener("click", () => elMenu.classList.remove("open"));
 elWs.onclick = () => { if (!CAN_CD) { alert("Workspace switching is unavailable in this session."); return; } const p = prompt("New workspace path:", elWs.textContent); if (p && p.trim()) q("/api/message", { text: "/cd " + p.trim() }); };
+elModel.onclick = () => { if (!CAN_MODEL) return; const m = prompt("Switch model to:", elModel.textContent); if (m && m.trim()) q("/api/message", { text: "/model " + m.trim() }); };
+elModel.style.cursor = "pointer"; elModel.title = "Click to switch model";
 elApproval.onchange = () => q("/api/message", { text: "/approval " + elApproval.value });
 
 // Slash autocomplete in the input.

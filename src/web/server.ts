@@ -16,6 +16,7 @@ import { formatWorkspaceTrustStatus } from "../ui/workspaceTrust.js";
 import { formatContext } from "../ui/formatters.js";
 import { visibleSlashCommands } from "../ui/slashCommands.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
+import { WorkspaceTrustStore, describeTrustEntry, type WorkspaceTrustScope } from "../workspace/WorkspaceTrustStore.js";
 
 const APPROVAL_MODES: ApprovalMode[] = ["on-request", "auto-local", "auto-safe", "auto-all", "never"];
 
@@ -39,7 +40,8 @@ export type WebEvent =
   | { type: "usage"; line: string }
   | { type: "mode"; agents: boolean; yes: boolean }
   | { type: "output"; title: string; text: string }
-  | { type: "state"; model: string; workspace: string; approval: string; agents: boolean; yes: boolean };
+  | { type: "state"; model: string; workspace: string; approval: string; agents: boolean; yes: boolean }
+  | { type: "trust"; workspace: string; current: string };
 
 export type WebServerOptions = {
   agent: Agent;
@@ -51,6 +53,8 @@ export type WebServerOptions = {
   demoEvents?: WebEvent[];
   /** Build a fresh agent for a different workspace (the /cd command). */
   switchWorkspace?: (workspace: string) => Promise<Agent>;
+  /** Build a fresh agent on the same workspace with a different model (the /model command). */
+  switchModel?: (model: string) => Promise<Agent>;
 };
 
 export type WebServer = {
@@ -230,9 +234,12 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
         }
         break;
       }
-      case "/trust":
-        out("Workspace trust", stripAnsi(formatWorkspaceTrustStatus(agent.config.workspaceRoot)));
+      case "/trust": {
+        const store = new WorkspaceTrustStore();
+        const entry = store.getTrustFor(agent.config.workspaceRoot);
+        emit({ type: "trust", workspace: agent.config.workspaceRoot, current: entry ? describeTrustEntry(entry) : "Not trusted" });
         break;
+      }
       case "/git-status":
         out("git status", asText(await agent.tools.execute("git_status", {}, ctx())));
         break;
@@ -274,9 +281,20 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
       case "/learn-project":
         void runTask(PROJECT_UNDERSTANDING_TASK);
         break;
-      case "/model":
-        out("Model", "Model switching in-session isn't available yet; restart with --model <name>.");
+      case "/model": {
+        if (!opts.switchModel) { out("Model", `Current: ${agent.config.model}\nModel switching is unavailable in this session.`); break; }
+        if (!arg) { out("Model", `Current: ${agent.config.model}\nUsage: /model <name>  (or click the model name in the header)`); break; }
+        try {
+          await agent.background.stopAll("model switch cleanup");
+          agent = await opts.switchModel(arg);
+          wire(agent);
+          out("Model", `Model switched to ${agent.config.model}.`);
+          emit(stateEvent());
+        } catch (e) {
+          out("Model", `Could not switch model: ${e instanceof Error ? e.message : String(e)}`);
+        }
         break;
+      }
       default:
         out("Unknown command", `${name} — type /help for the list.`);
     }
@@ -335,6 +353,7 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
           approval: agent.approval.mode,
           approvalModes: APPROVAL_MODES,
           canSwitchWorkspace: Boolean(opts.switchWorkspace),
+          canSwitchModel: Boolean(opts.switchModel),
           commands: visibleSlashCommands().map((c) => ({ name: c.name, usage: c.usage, description: c.description })),
           running,
           usage: agent.usage.hasData ? agent.usage.format() : ""
@@ -354,6 +373,30 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
       }
       if (url.pathname === "/api/interrupt") {
         controller?.abort();
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      if (url.pathname === "/api/trust") {
+        const action = String(body?.action ?? "");
+        const store = new WorkspaceTrustStore();
+        const ws2 = agent.config.workspaceRoot;
+        if (action === "clear") store.clearTrust(ws2);
+        else if (action === "exact" || action === "descendants") store.setTrust(ws2, action as WorkspaceTrustScope);
+        // Rebuild the agent so the sandbox re-reads the new trust state.
+        if (opts.switchWorkspace) {
+          try {
+            agent = await opts.switchWorkspace(ws2);
+            wire(agent);
+          } catch {
+            /* keep current agent if rebuild fails */
+          }
+        } else {
+          agent.config.workspaceTrusted = Boolean(store.getTrustFor(ws2));
+        }
+        const entry = store.getTrustFor(ws2);
+        out("Workspace trust", entry ? `Updated: ${describeTrustEntry(entry)}` : "Trust cleared.");
+        emit(stateEvent());
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
         return;

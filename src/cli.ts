@@ -242,7 +242,8 @@ async function runInteractiveWeb(opts: CliOpts): Promise<void> {
       const next = await makeAgent(opts, "interactive session", path.resolve(workspace));
       process.chdir(next.config.workspaceRoot);
       return next;
-    }
+    },
+    switchModel: async (model) => makeAgent({ ...opts, model }, "interactive session")
   });
   console.log(chalk.bold.cyan("grok-code") + chalk.dim(" web UI running at:"));
   console.log("  " + chalk.underline(server.url));

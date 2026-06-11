@@ -94,9 +94,15 @@ async function main() {
   const serverAsk = await startWebServer({ agent: fakeAgent, demoEvents: [...DEMO_EVENTS.slice(0, 3), ASK_EVENT], openBrowser: false });
   await shot(page, serverAsk, [], "03-ask-user.png");
 
+  // 5. Workspace-trust card.
+  const trustEvent = { type: "trust", workspace: "C:/Users/jason/Desktop/Grok-cli", current: "Not trusted" };
+  const serverTrust = await startWebServer({ agent: fakeAgent, demoEvents: [DEMO_EVENTS[0], trustEvent], openBrowser: false });
+  await shot(page, serverTrust, [], "05-trust.png");
+
   await browser.close();
   await server.close();
   await serverAsk.close();
+  await serverTrust.close();
   console.log("\nScreenshots in scripts/screenshots/");
 }
 

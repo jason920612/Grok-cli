@@ -94,6 +94,16 @@ test("a /status command emits an output event over SSE", async () => {
   });
 });
 
+test("a /trust command emits a trust event with the current status", async () => {
+  await withServer(async ({ base, token }) => {
+    const sse = collectSse(base, token, (b) => b.includes('"type":"trust"'));
+    await fetch(`${base}/api/message?t=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "/trust" }) });
+    const buf = await sse;
+    assert.match(buf, /"type":"trust"/);
+    assert.match(buf, /"current":/);
+  });
+});
+
 test("/approval command changes the mode", async () => {
   await withServer(async ({ base, token, agent }) => {
     await fetch(`${base}/api/message?t=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "/approval auto-safe" }) });
