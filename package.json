@@ -34,13 +34,13 @@
     "ignore": "^7.0.3",
     "openai": "^4.85.4",
     "ora": "^8.2.0",
+    "playwright": "^1.60.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "@types/diff": "^7.0.1",
     "@types/node": "^22.13.5",
-    "playwright": "^1.60.0",
     "tsx": "^4.19.3",
     "typescript": "^5.7.3"
   }
