@@ -14,6 +14,7 @@ import type { AgentTool, ToolExecutionContext, SpawnWorker } from "../tools/Agen
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { scanRepo } from "../workspace/RepoScanner.js";
 import { AgentLoop } from "../agent/AgentLoop.js";
+import type { SessionUsage } from "../agent/SessionUsage.js";
 import { Board } from "./Board.js";
 import { GitService } from "./GitService.js";
 import {
@@ -62,13 +63,14 @@ export class Orchestrator {
   private setupDone = false;
 
   private readonly applyToWorkingTree: boolean;
+  private readonly usage?: SessionUsage;
 
   constructor(
     private readonly provider: LLMProvider,
     private readonly config: GrokCodeConfig,
     runId: string,
     originalTask = "",
-    opts: { applyToWorkingTree?: boolean } = {}
+    opts: { applyToWorkingTree?: boolean; usage?: SessionUsage } = {}
   ) {
     this.git = new GitService(config.workspaceRoot, runId);
     this.approval = new ApprovalPolicy(config.approval, originalTask);
@@ -76,6 +78,8 @@ export class Orchestrator {
     // Interactive use applies the result to the working tree; one-shot real-git
     // runs leave a review branch instead.
     this.applyToWorkingTree = opts.applyToWorkingTree ?? false;
+    // Shared so orchestrator + every worker's token usage rolls up to the session.
+    this.usage = opts.usage;
   }
 
   async run(task: string, signal?: AbortSignal): Promise<OrchestratorResult> {
@@ -203,6 +207,6 @@ export class Orchestrator {
     };
 
     const config: GrokCodeConfig = { ...this.config, workspaceRoot: opts.root };
-    return new AgentLoop(this.provider, config, context, tools, toolCtx, skillLoader, toolSkills, opts.role);
+    return new AgentLoop(this.provider, config, context, tools, toolCtx, skillLoader, toolSkills, opts.role, undefined, this.usage);
   }
 }

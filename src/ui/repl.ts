@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { select, input } from "@inquirer/prompts";
 import type { Agent } from "../agent/Agent.js";
 import { Orchestrator } from "../agents/Orchestrator.js";
+import { formatTotals } from "../agent/SessionUsage.js";
 import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
 import { colorDiff } from "./diffView.js";
@@ -80,6 +81,8 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
       );
       remember(transcript, "assistant", String(response));
       console.log(`\n${response}\n`);
+      const lap = agent.usage.lap();
+      if (lap.calls > 0) console.log(chalk.dim(formatTotals(lap)));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       remember(transcript, "system", message);
@@ -94,7 +97,7 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
 
 async function runReplTeam(agent: Agent, task: string, signal: AbortSignal): Promise<string> {
   console.log(chalk.dim("Multi-agent: orchestrator + parallel sub-agents…"));
-  const orchestrator = new Orchestrator(agent.provider, agent.config, randomUUID().slice(0, 8), task, { applyToWorkingTree: true });
+  const orchestrator = new Orchestrator(agent.provider, agent.config, randomUUID().slice(0, 8), task, { applyToWorkingTree: true, usage: agent.usage });
   const result = await orchestrator.run(task, signal);
   if (result.applied && result.diff) return `${result.report}\n\n${chalk.dim("[changes applied to your working tree]")}\n${result.diff}`;
   if (!result.applied) return `${result.report}\n\n${chalk.dim(`[review branch] ${result.integrationBranch}`)}`;
@@ -112,7 +115,11 @@ async function handleSlash(command: string, agent: Agent, options: ReplOptions, 
       output(visibleSlashCommands().map((cmd) => `${cmd.usage.padEnd(24)} ${cmd.description}`).join("\n"));
       break;
     case "/status":
-      output([formatSessionStatus(agent.config), formatWorkspaceTrustStatus(agent.config.workspaceRoot)].join("\n"));
+      output([
+        formatSessionStatus(agent.config),
+        formatWorkspaceTrustStatus(agent.config.workspaceRoot),
+        agent.usage.hasData ? agent.usage.format() : "tokens this session: none yet"
+      ].join("\n"));
       break;
     case "/cd":
     case "/workspace":

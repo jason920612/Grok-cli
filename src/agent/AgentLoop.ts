@@ -19,6 +19,7 @@ import { EmptyResponseGuard, PlanOnlyGuard, MultiToolGuard, type ResponseGuard }
 import { RollingSummarizer, mergeSummaries, renderSummary, EMPTY_SUMMARY, type EpisodeSummary } from "../context/RollingSummarizer.js";
 export { shouldContinueAfterPlanOnlyResponse } from "./ResponseGuards.js";
 import { ConsoleEventSink, type AgentEventSink } from "./AgentEvents.js";
+import type { SessionUsage } from "./SessionUsage.js";
 
 /**
  * AgentLoop (§7) — pure-stateless orchestrator. No conversation-chain modes;
@@ -40,7 +41,8 @@ export class AgentLoop {
     private readonly skillLoader: SkillLoader,
     private readonly toolSkills: ToolSkillRegistry,
     private readonly projectInstructions: string,
-    private readonly events: AgentEventSink = new ConsoleEventSink()
+    private readonly events: AgentEventSink = new ConsoleEventSink(),
+    private readonly usage?: SessionUsage
   ) {
     this.verifier = config.enableVerifier ? new VerifierAgent(provider, config) : undefined;
     this.summarizer = config.enableLlmSummary ? new RollingSummarizer(provider) : undefined;
@@ -98,6 +100,7 @@ export class AgentLoop {
       } finally {
         spinner.stop();
       }
+      this.usage?.record(response.usage);
       state.throwIfAborted();
       for (const warning of response.warnings) this.events.emit({ type: "warn", message: warning });
 

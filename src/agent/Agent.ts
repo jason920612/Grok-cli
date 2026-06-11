@@ -14,6 +14,7 @@ import { ProjectMemory } from "../memory/ProjectMemory.js";
 import { UserProfile } from "../memory/UserProfile.js";
 import { scanRepo } from "../workspace/RepoScanner.js";
 import { AgentLoop } from "./AgentLoop.js";
+import { SessionUsage } from "./SessionUsage.js";
 
 export class Agent {
   readonly context = new ContextManager();
@@ -23,6 +24,7 @@ export class Agent {
   readonly background = new BackgroundProcessManager();
   readonly memory: ProjectMemory;
   readonly userProfile: UserProfile;
+  readonly usage = new SessionUsage();
   /** Interactive question hook; set by the REPL, undefined in one-shot mode. */
   askUser?: ToolExecutionContext["askUser"];
   readonly approval: ApprovalPolicy;
@@ -59,7 +61,7 @@ export class Agent {
   }
 
   async run(task: string, oneShot: boolean, signal?: AbortSignal): Promise<string> {
-    const loop = new AgentLoop(this.provider, this.config, this.context, this.tools, this.toolContext(), this.skillLoader, this.toolSkills, this.skillLoader.projectInstructions());
+    const loop = new AgentLoop(this.provider, this.config, this.context, this.tools, this.toolContext(), this.skillLoader, this.toolSkills, this.skillLoader.projectInstructions(), undefined, this.usage);
     return loop.run(task, oneShot, signal);
   }
 
