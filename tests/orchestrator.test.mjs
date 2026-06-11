@@ -172,57 +172,6 @@ test("an interrupt propagates to a running worker and unwinds the run (no hang)"
   await assert.rejects(() => orch.run("task", controller.signal), /interrupt/i);
 });
 
-test("debate: an independent critic reviews the worker's PR before merge", async () => {
-  const root = gitRepo();
-  const used = new Set();
-  const provider = {
-    id: "fake",
-    capabilities: { serverTools: [], promptCaching: true },
-    async complete(req) {
-      const blob = req.messages.map((m) => ("content" in m ? m.content : "")).join("\n");
-      if (/adversarial code reviewer/i.test(blob)) {
-        used.add("critic");
-        return toResult(text("Checked the diff; the change is correct and verified.\nVERDICT: approve"));
-      }
-      if (blob.includes('sub-agent "w1"')) {
-        used.add("worker");
-        if (!used.has("w1patch")) { used.add("w1patch"); return toResult(fnCall("apply_patch", { patch: "*** Begin Patch\n*** Add File: f.txt\n+ok\n*** End Patch", reason: "x" })); }
-        if (!used.has("w1pr")) { used.add("w1pr"); return toResult(fnCall("open_pr", { title: "add f", body: "done", linkedIssue: 1 })); }
-        return toResult(text("worker done"));
-      }
-      used.add("orchestrator");
-      if (!used.has("spawned")) { used.add("spawned"); return toResult(fnCall("spawn_agent", { name: "w1", role: "make f.txt", brief: "create f.txt" })); }
-      if (!used.has("merged")) { used.add("merged"); return toResult(fnCall("merge_pr", { number: 1 })); }
-      return toResult(text("All merged."));
-    }
-  };
-  const orch = new Orchestrator(provider, { ...config(root), enableDebate: true, debateCritics: 1 }, "debate-run", "make f");
-  const result = await orch.run("Create f.txt.");
-  assert.ok(used.has("critic"), "an independent critic reviewed the PR");
-  const merged = execFileSync("git", ["show", `${result.integrationBranch}:f.txt`], { cwd: root, encoding: "utf8" });
-  assert.match(merged, /ok/);
-});
-
-test("debate: design is debated by proposers + a judge before building", async () => {
-  const root = gitRepo();
-  const used = new Set();
-  const provider = {
-    id: "fake",
-    capabilities: { serverTools: [], promptCaching: true },
-    async complete(req) {
-      const blob = req.messages.map((m) => ("content" in m ? m.content : "")).join("\n");
-      if (/design proposer/i.test(blob)) { used.add("proposer"); return toResult(text("Proposal: approach X. Evidence: existing module Y.")); }
-      if (/design judge/i.test(blob)) { used.add("judge"); return toResult(text("CHOSEN DESIGN: approach X, sub-tasks A and B.")); }
-      if (!used.has("debated")) { used.add("debated"); return toResult(fnCall("debate_design", { question: "How should we build feature F?" })); }
-      return toResult(text("Plan ready."));
-    }
-  };
-  const orch = new Orchestrator(provider, { ...config(root), enableDebate: true, debateProposers: 2 }, "design-run", "build F");
-  await orch.run("Build feature F.");
-  assert.ok(used.has("proposer"), "proposer agents argued designs");
-  assert.ok(used.has("judge"), "a judge decided the design");
-});
-
 function routedProvider(queues) {
   const q = Object.fromEntries(Object.entries(queues).map(([k, v]) => [k, [...v]]));
   return {

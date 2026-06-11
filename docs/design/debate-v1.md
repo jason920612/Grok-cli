@@ -1,5 +1,13 @@
 # Multi-agent debate v1 — discussion, critique, decision
 
+> **REMOVED (kept for history).** The debate system (per-PR adversarial critics +
+> judge, and the up-front `debate_design` proposer/judge round) was reverted: in
+> practice it multiplied token cost and caused the orchestrator to loop
+> (re-verifying merged files and spawning extra "polish/verify" workers without
+> terminating). The orchestrator is now plain: plan → delegate (parallel workers
+> that verify their own work) → review → merge → done. This document describes the
+> removed design only.
+
 Problem: the orchestrator only *allocates* tasks. Agents don't debate; the
 orchestrator decides the plan alone and rubber-stamps its own delegated PRs.
 The Board already has the primitives (issue / PR / comment / @mention / DM /

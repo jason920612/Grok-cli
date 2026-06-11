@@ -25,11 +25,7 @@ export const GrokCodeConfigSchema = z.object({
   hybridResetAfterFailures: z.number().int().positive().default(3),
   enableVerifier: z.boolean().default(false),
   verifierMaxRetries: z.number().int().nonnegative().default(2),
-  enableLlmSummary: z.boolean().default(false),
-  // Multi-agent debate (debate-v1): adversarial PR critique + evidence-weighted judge.
-  enableDebate: z.boolean().default(true),
-  debateCritics: z.number().int().min(1).max(5).default(2),
-  debateProposers: z.number().int().min(2).max(4).default(2)
+  enableLlmSummary: z.boolean().default(false)
 });
 
 export type GrokCodeConfig = z.infer<typeof GrokCodeConfigSchema>;
