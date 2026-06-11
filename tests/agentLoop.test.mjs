@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AgentLoop } from "../dist/agent/AgentLoop.js";
+import { Interjections } from "../dist/agent/Interjections.js";
 import { TOOL_EFFECTS } from "../dist/tools/toolEffects.js";
 
 function functionCall(name, args = {}, callId = `call-${name}`) {
@@ -34,7 +35,7 @@ function effectsFor(name) {
   return TOOL_EFFECTS[name] ?? { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true };
 }
 
-function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = [] } = {}) {
+function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = [], interjections } = {}) {
   const requests = [];
   const toolCalls = [];
   const storedContextItems = [...contextItems];
@@ -104,7 +105,11 @@ function makeLoop({ responses, config = {}, execute, isReadOnly, contextItems = 
     { background: { listRunning() { return []; }, async stopAll() { return []; } } },
     { select() { return []; }, projectInstructions() { return ""; } },
     { toolIndex() { return ""; }, select() { return []; } },
-    ""
+    "",
+    undefined,
+    undefined,
+    undefined,
+    interjections
   );
   // ensure list() can see tools the executor touches even before execution
   loop.__used = usedNames;
@@ -326,4 +331,35 @@ test("verifier API failures include diagnostic details in feedback", async () =>
   assert.match(output, /Verifier API call failed: Connection error\./);
   assert.match(output, /status=503/);
   assert.match(output, /code=service_unavailable/);
+});
+
+test("a mid-task interjection is delivered to the next step as a user message", async () => {
+  const interjections = new Interjections();
+  const { loop, requests } = makeLoop({
+    interjections,
+    responses: [
+      // Simulate the user typing mid-task while step 1's request is in flight.
+      () => {
+        interjections.push("also update the README");
+        return responseWithTool("r1", functionCall("read_file_range", { path: "a.ts" }, "c1"));
+      },
+      responseWithText("r2", "done")
+    ],
+    isReadOnly: (n) => n === "read_file_range"
+  });
+  await loop.run("inspect a.ts", true);
+  // Step 1's request predates the interjection; step 2's request carries it.
+  assert.doesNotMatch(allInput(requests[0]), /also update the README/);
+  assert.match(allInput(requests[1]), /User interjection \(mid-task\)/);
+  assert.match(allInput(requests[1]), /also update the README/);
+});
+
+test("interjections queue drains exactly once", () => {
+  const q = new Interjections();
+  q.push("first");
+  q.push("  ");
+  q.push("second");
+  assert.equal(q.pending, 2, "blank notes are ignored");
+  assert.deepEqual(q.drain(), ["first", "second"]);
+  assert.deepEqual(q.drain(), [], "second drain is empty");
 });

@@ -4,6 +4,7 @@ import { select, input } from "@inquirer/prompts";
 import type { Agent } from "../agent/Agent.js";
 import { Orchestrator } from "../agents/Orchestrator.js";
 import { formatTotals } from "../agent/SessionUsage.js";
+import { Interjections } from "../agent/Interjections.js";
 import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
 import { colorDiff } from "./diffView.js";
@@ -76,8 +77,15 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
     }
 
     try {
-      const response = await replInput.runWithEscInterrupt((signal) =>
-        useAgents ? runReplTeam(agent, text, signal) : agent.run(text, false, signal)
+      const interjections = new Interjections();
+      const response = await replInput.runWithEscInterrupt(
+        (signal) => (useAgents ? runReplTeam(agent, text, signal, interjections) : agent.run(text, false, signal, interjections)),
+        {
+          onInterject: (msg) => {
+            interjections.push(msg);
+            console.log(chalk.dim(`  💬 queued for the agent: ${msg}`));
+          }
+        }
       );
       remember(transcript, "assistant", String(response));
       console.log(`\n${response}\n`);
@@ -95,9 +103,9 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
   return agent;
 }
 
-async function runReplTeam(agent: Agent, task: string, signal: AbortSignal): Promise<string> {
+async function runReplTeam(agent: Agent, task: string, signal: AbortSignal, interjections?: Interjections): Promise<string> {
   console.log(chalk.dim("Multi-agent: orchestrator + parallel sub-agents…"));
-  const orchestrator = new Orchestrator(agent.provider, agent.config, randomUUID().slice(0, 8), task, { applyToWorkingTree: true, usage: agent.usage });
+  const orchestrator = new Orchestrator(agent.provider, agent.config, randomUUID().slice(0, 8), task, { applyToWorkingTree: true, usage: agent.usage, interjections });
   const result = await orchestrator.run(task, signal);
   if (result.applied && result.diff) return `${result.report}\n\n${chalk.dim("[changes applied to your working tree]")}\n${result.diff}`;
   if (!result.applied) return `${result.report}\n\n${chalk.dim(`[review branch] ${result.integrationBranch}`)}`;

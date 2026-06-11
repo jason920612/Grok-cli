@@ -15,6 +15,7 @@ import { UserProfile } from "../memory/UserProfile.js";
 import { scanRepo } from "../workspace/RepoScanner.js";
 import { AgentLoop } from "./AgentLoop.js";
 import { SessionUsage } from "./SessionUsage.js";
+import type { Interjections } from "./Interjections.js";
 
 export class Agent {
   readonly context = new ContextManager();
@@ -60,8 +61,8 @@ export class Agent {
     await this.tools.execute("git_status", {}, toolCtx);
   }
 
-  async run(task: string, oneShot: boolean, signal?: AbortSignal): Promise<string> {
-    const loop = new AgentLoop(this.provider, this.config, this.context, this.tools, this.toolContext(), this.skillLoader, this.toolSkills, this.skillLoader.projectInstructions(), undefined, this.usage);
+  async run(task: string, oneShot: boolean, signal?: AbortSignal, interjections?: Interjections): Promise<string> {
+    const loop = new AgentLoop(this.provider, this.config, this.context, this.tools, this.toolContext(), this.skillLoader, this.toolSkills, this.skillLoader.projectInstructions(), undefined, this.usage, undefined, interjections);
     return loop.run(task, oneShot, signal);
   }
 

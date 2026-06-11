@@ -20,6 +20,7 @@ import { RollingSummarizer, mergeSummaries, renderSummary, EMPTY_SUMMARY, type E
 export { shouldContinueAfterPlanOnlyResponse } from "./ResponseGuards.js";
 import { ConsoleEventSink, type AgentEventSink } from "./AgentEvents.js";
 import type { SessionUsage } from "./SessionUsage.js";
+import type { Interjections } from "./Interjections.js";
 
 /**
  * AgentLoop (§7) — pure-stateless orchestrator. No conversation-chain modes;
@@ -44,7 +45,9 @@ export class AgentLoop {
     private readonly events: AgentEventSink = new ConsoleEventSink(),
     private readonly usage?: SessionUsage,
     /** Agent label for multi-agent runs; when set, live spinners are suppressed. */
-    private readonly label?: string
+    private readonly label?: string,
+    /** Mid-task user messages, drained at the top of each step. */
+    private readonly interjections?: Interjections
   ) {
     this.verifier = config.enableVerifier ? new VerifierAgent(provider, config) : undefined;
     this.summarizer = config.enableLlmSummary ? new RollingSummarizer(provider) : undefined;
@@ -86,6 +89,11 @@ export class AgentLoop {
 
     while (state.advance()) {
       this.context.nextStep(task);
+      // Deliver any mid-task messages the user typed since the last step.
+      for (const note of this.interjections?.drain() ?? []) {
+        messages.push({ role: "user", content: `<User interjection (mid-task)>\n${note}\n</User interjection>` });
+        this.events.emit({ type: "info", message: `↪ picked up your message: "${note}"` });
+      }
       this.compactTranscript(messages);
 
       // Labeled (multi-agent) loops skip the live spinner — concurrent workers

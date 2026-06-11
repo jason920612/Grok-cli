@@ -16,6 +16,7 @@ import { scanRepo } from "../workspace/RepoScanner.js";
 import { AgentLoop } from "../agent/AgentLoop.js";
 import { LabeledEventSink } from "../agent/AgentEvents.js";
 import type { SessionUsage } from "../agent/SessionUsage.js";
+import type { Interjections } from "../agent/Interjections.js";
 import { Board } from "./Board.js";
 import { GitService } from "./GitService.js";
 import {
@@ -65,13 +66,14 @@ export class Orchestrator {
 
   private readonly applyToWorkingTree: boolean;
   private readonly usage?: SessionUsage;
+  private readonly interjections?: Interjections;
 
   constructor(
     private readonly provider: LLMProvider,
     private readonly config: GrokCodeConfig,
     runId: string,
     originalTask = "",
-    opts: { applyToWorkingTree?: boolean; usage?: SessionUsage } = {}
+    opts: { applyToWorkingTree?: boolean; usage?: SessionUsage; interjections?: Interjections } = {}
   ) {
     this.git = new GitService(config.workspaceRoot, runId);
     this.approval = new ApprovalPolicy(config.approval, originalTask);
@@ -81,6 +83,9 @@ export class Orchestrator {
     this.applyToWorkingTree = opts.applyToWorkingTree ?? false;
     // Shared so orchestrator + every worker's token usage rolls up to the session.
     this.usage = opts.usage;
+    // Mid-task user messages are delivered to the orchestrator only (workers
+    // follow their fixed brief), so the user talks to the one driving the plan.
+    this.interjections = opts.interjections;
   }
 
   async run(task: string, signal?: AbortSignal): Promise<OrchestratorResult> {
@@ -209,6 +214,7 @@ export class Orchestrator {
 
     const config: GrokCodeConfig = { ...this.config, workspaceRoot: opts.root };
     const events = new LabeledEventSink(opts.agentId, !opts.isOrchestrator);
-    return new AgentLoop(this.provider, config, context, tools, toolCtx, skillLoader, toolSkills, opts.role, events, this.usage, opts.agentId);
+    const interjections = opts.isOrchestrator ? this.interjections : undefined;
+    return new AgentLoop(this.provider, config, context, tools, toolCtx, skillLoader, toolSkills, opts.role, events, this.usage, opts.agentId, interjections);
   }
 }

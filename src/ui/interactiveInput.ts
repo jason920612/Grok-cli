@@ -83,7 +83,10 @@ export class ReplInput {
    * parked; stdin is put in raw mode just to catch Esc, then parked again so the
    * next readLine starts clean.
    */
-  async runWithEscInterrupt<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  async runWithEscInterrupt<T>(
+    work: (signal: AbortSignal) => Promise<T>,
+    opts: { onInterject?: (text: string) => void } = {}
+  ): Promise<T> {
     if (this.fallback) return work(new AbortController().signal);
     const controller = new AbortController();
     readline.emitKeypressEvents(process.stdin);
@@ -93,11 +96,41 @@ export class ReplInput {
       /* not all TTYs support raw mode */
     }
     process.stdin.resume();
-    process.stdout.write(chalk.dim("Press Esc or Ctrl+C to interrupt the running request.\n"));
-    const onKeypress = (_str: string, key: readline.Key) => {
+    process.stdout.write(
+      chalk.dim(
+        opts.onInterject
+          ? "Esc/Ctrl+C interrupts · type a message + Enter to send it to the agent mid-task.\n"
+          : "Press Esc or Ctrl+C to interrupt the running request.\n"
+      )
+    );
+    let buffer = "";
+    const onKeypress = (str: string, key: readline.Key) => {
       // Raw mode suppresses the automatic SIGINT, so handle Ctrl+C here too —
       // a graceful abort instead of an abrupt exit 130 mid-task.
-      if (key && (key.name === "escape" || (key.ctrl && key.name === "c"))) controller.abort();
+      if (key && (key.name === "escape" || (key.ctrl && key.name === "c"))) {
+        controller.abort();
+        return;
+      }
+      if (!opts.onInterject) return;
+      if (key && (key.name === "return" || key.name === "enter")) {
+        const text = buffer;
+        buffer = "";
+        process.stdout.write("\n");
+        if (text.trim()) opts.onInterject(text);
+        return;
+      }
+      if (key && key.name === "backspace") {
+        if (buffer.length > 0) {
+          buffer = buffer.slice(0, -1);
+          process.stdout.write("\b \b");
+        }
+        return;
+      }
+      // Accumulate + echo printable characters as the user types an interjection.
+      if (str && !key?.ctrl && !key?.meta && str >= " ") {
+        buffer += str;
+        process.stdout.write(str);
+      }
     };
     process.stdin.on("keypress", onKeypress);
     try {
