@@ -28,7 +28,8 @@ export const GrokCodeConfigSchema = z.object({
   enableLlmSummary: z.boolean().default(false),
   // Multi-agent debate (debate-v1): adversarial PR critique + evidence-weighted judge.
   enableDebate: z.boolean().default(true),
-  debateCritics: z.number().int().min(1).max(5).default(2)
+  debateCritics: z.number().int().min(1).max(5).default(2),
+  debateProposers: z.number().int().min(2).max(4).default(2)
 });
 
 export type GrokCodeConfig = z.infer<typeof GrokCodeConfigSchema>;

@@ -39,6 +39,8 @@ export type ToolExecutionContext = {
   agentId?: string;
   /** Run a worker sub-agent (orchestrator only). */
   spawnWorker?: SpawnWorker;
+  /** Run a design debate among proposer agents + a judge (orchestrator only). */
+  debateDesign?: (question: string, options?: string[]) => Promise<{ design: string }>;
   /** Mailbox for images a tool wants the model to SEE; the loop attaches them to the next turn. */
   images?: Array<{ dataUri: string; note?: string }>;
 };

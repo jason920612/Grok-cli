@@ -33,6 +33,23 @@ export function spawnAgentTool(skills: ToolSkillRegistry) {
   );
 }
 
+export function debateDesignTool(skills: ToolSkillRegistry) {
+  return withProgress(
+    makeTool(
+      "debate_design",
+      "Run a design debate BEFORE decomposing a non-trivial build: several proposer agents argue distinct designs and a judge decides. Returns the chosen design to base your plan on. Call this once up front for anything beyond a trivial change.",
+      schemas.object({ question: { type: "string" }, options: { type: "array" } }, ["question"]),
+      z.object({ question: z.string().min(1), options: z.array(z.string()).optional() }),
+      skills,
+      async (args, ctx) => {
+        if (!ctx.debateDesign) throw new Error("Design debate is only available to the orchestrator.");
+        const { design } = await ctx.debateDesign(args.question, args.options);
+        return { design };
+      }
+    )
+  );
+}
+
 export function spawnAgentsTool(skills: ToolSkillRegistry) {
   return withProgress(
     makeTool(

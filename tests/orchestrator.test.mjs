@@ -176,6 +176,26 @@ test("debate: an independent critic reviews the worker's PR before merge", async
   assert.match(merged, /ok/);
 });
 
+test("debate: design is debated by proposers + a judge before building", async () => {
+  const root = gitRepo();
+  const used = new Set();
+  const provider = {
+    id: "fake",
+    capabilities: { serverTools: [], promptCaching: true },
+    async complete(req) {
+      const blob = req.messages.map((m) => ("content" in m ? m.content : "")).join("\n");
+      if (/design proposer/i.test(blob)) { used.add("proposer"); return toResult(text("Proposal: approach X. Evidence: existing module Y.")); }
+      if (/design judge/i.test(blob)) { used.add("judge"); return toResult(text("CHOSEN DESIGN: approach X, sub-tasks A and B.")); }
+      if (!used.has("debated")) { used.add("debated"); return toResult(fnCall("debate_design", { question: "How should we build feature F?" })); }
+      return toResult(text("Plan ready."));
+    }
+  };
+  const orch = new Orchestrator(provider, { ...config(root), enableDebate: true, debateProposers: 2 }, "design-run", "build F");
+  await orch.run("Build feature F.");
+  assert.ok(used.has("proposer"), "proposer agents argued designs");
+  assert.ok(used.has("judge"), "a judge decided the design");
+});
+
 function routedProvider(queues) {
   const q = Object.fromEntries(Object.entries(queues).map(([k, v]) => [k, [...v]]));
   return {

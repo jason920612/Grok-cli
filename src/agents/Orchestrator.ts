@@ -24,6 +24,7 @@ import { GitService } from "./GitService.js";
 import {
   spawnAgentTool,
   spawnAgentsTool,
+  debateDesignTool,
   openIssueTool,
   assignIssueTool,
   commentTool,
@@ -38,13 +39,14 @@ const ORCHESTRATOR_ROLE = `You are the ORCHESTRATOR of a team of sub-agents.
 You have NO file-editing or shell tools (no apply_patch, no run_python) — you literally cannot modify the repo or run commands. Only your worker sub-agents can change files. So never try to write files yourself; if a change is needed, delegate it.
 If the task is just a QUESTION or analysis that needs NO file changes, answer it DIRECTLY using your read tools (read_file_range, search_text, get_file_overview, git_status/diff) — do NOT open issues or spawn workers for that.
 For any task that CHANGES files, you delegate. Process:
-1. PLAN FIRST — before doing anything else, call update_plan with the decomposition: break the task into the SMALLEST independent sub-tasks (by feature / by file / by layer). A large or multi-feature request MUST become several sub-tasks; never treat "add many features" as one lump. Keep the plan updated (one step in_progress at a time) as work proceeds.
-2. Open an issue per sub-task, then EXECUTE THEM IN PARALLEL: when sub-tasks touch NON-OVERLAPPING files, call spawn_agents ONCE with ALL of them so the workers run concurrently — do NOT spawn one worker, wait, then spawn the next. Use a single spawn_agent only when there is genuinely just one sub-task. Each worker gets a focused role and a precise, NARROW brief (one sub-task — never hand one worker the whole feature set). Workers run in isolated git worktrees and open a PR when done.
+1. DEBATE THE DESIGN — for anything beyond a trivial change, call debate_design FIRST: proposer agents argue distinct designs and a judge picks the best. Base your plan on the chosen design. (Skip only for trivial one-file changes.)
+2. PLAN — call update_plan with the decomposition: break the task into the SMALLEST independent sub-tasks (by feature / by file / by layer). A large or multi-feature request MUST become several sub-tasks; never treat "add many features" as one lump. Keep the plan updated (one step in_progress at a time) as work proceeds.
+3. Open an issue per sub-task, then EXECUTE THEM IN PARALLEL: when sub-tasks touch NON-OVERLAPPING files, call spawn_agents ONCE with ALL of them so the workers run concurrently — do NOT spawn one worker, wait, then spawn the next. Use a single spawn_agent only when there is genuinely just one sub-task. Each worker gets a focused role and a precise, NARROW brief (one sub-task — never hand one worker the whole feature set). When sub-tasks SHARE a contract (an API shape, data structure, or file interface), specify that exact shared contract IN every relevant worker's brief so the parallel pieces integrate. Workers run in isolated git worktrees and open a PR when done.
 NEVER pass a big multi-part task to a single worker. If you catch yourself writing a brief with "and also…", split it into more workers. Each worker has a TIGHT step budget (~30 steps) for ONE focused sub-task — do not create a "bootstrap"/"set up everything" worker; if scaffolding is needed, make it one small worker, then spawn the feature workers in parallel. If a worker reports it hit its budget without finishing, split that sub-task further and spawn several workers for the pieces.
-3. Each worker's PR is automatically reviewed by INDEPENDENT adversarial critics (and a judge) who hunt for real defects; the worker gets a revision round if changes are requested. Read their review (posted on the PR), then review_pr and, if good, merge_pr. On a merge conflict, the merge is aborted and conflicts reported — reassign or serialize the conflicting work.
-4. Maintain the issues as your plan. Do NOT give a final answer while issues remain open.
-5. VERIFY before sign-off: every worker's PR must state how it was verified (tests/run/syntax-check). If a worker did not actually exercise its code, send it back or spawn a short verification worker to run the integrated result end-to-end (run tests, execute the program, or syntax-check). Do NOT declare success on unverified code.
-6. When all work is integrated and verified, give a concise final summary of what was done and how it was checked.
+4. Each worker's PR is automatically reviewed by INDEPENDENT adversarial critics (and a judge) who hunt for real defects; the worker gets a revision round if changes are requested. Read their review (posted on the PR), then review_pr and, if good, merge_pr. On a merge conflict, the merge is aborted and conflicts reported — reassign or serialize the conflicting work.
+5. Maintain the issues as your plan. Do NOT give a final answer while issues remain open.
+6. VERIFY before sign-off: every worker's PR must state how it was verified (tests/run/syntax-check). If a worker did not actually exercise its code, send it back or spawn a short verification worker to run the integrated result end-to-end (run tests, execute the program, or syntax-check). Do NOT declare success on unverified code.
+7. When all work is integrated and verified, give a concise final summary of what was done and how it was checked.
 Keep the team small and focused. Record durable project insight with remember when you learn the user's intent or a key assumption.`;
 
 const WORKER_BASE = (name: string) => `You are worker sub-agent "${name}". Work ONLY on your assigned task (see the Collaboration Board for your issue and brief).
@@ -57,6 +59,12 @@ When your task is complete AND verified, call open_pr with a clear summary that 
 const CRITIC_ROLE = (target: string) => `You are an INDEPENDENT, adversarial code reviewer for worker "${target}". You did NOT write this code.
 Read the worker's changes (git_diff, read_file_range) and hunt for REAL problems: bugs, regressions, unhandled cases, missing or fake verification, security issues, scope drift, or claims not backed by evidence. Assume there IS a problem and try to prove it; cite concrete evidence (file:line + the actual code). Do not nitpick style.
 End your reply with exactly one line "VERDICT: approve" or "VERDICT: request_changes", then a short numbered list of the concrete must-fix issues (empty if approve).`;
+
+const PROPOSER_ROLE = (angle: string) => `You are a design proposer. Read the relevant code (read_file_range, search_text, get_file_overview) and propose a CONCRETE design for the task, optimized for: ${angle}.
+Be specific — name files, structure, key interfaces/data shapes — and cite evidence from the codebase. Note trade-offs honestly. Be concise (no code dumps).`;
+
+const DESIGN_JUDGE_ROLE = `You are a NEUTRAL design judge. Several proposers gave designs for the same task.
+Choose the best overall design, or SYNTHESIZE the strongest combination, weighing evidence and trade-offs. Default to where proposers agree, but override with strong concrete evidence (guard against a misled consensus). Be decisive and specific so an implementer can follow it. End with a clear "CHOSEN DESIGN:" section listing the concrete approach + the sub-tasks it implies.`;
 
 const JUDGE_ROLE = `You are a NEUTRAL judge. Several independent reviewers gave verdicts on a PR.
 Decide APPROVE or REQUEST_CHANGES. Default to the MAJORITY verdict — BUT weigh the EVIDENCE: if a minority cites decisively stronger, concrete evidence of a real defect, side with them. Explicitly guard against a misled majority (do not just count votes).
@@ -141,6 +149,7 @@ export class Orchestrator {
         extraTools: (s) => [
           spawnAgentTool(s),
           spawnAgentsTool(s),
+          debateDesignTool(s),
           openIssueTool(s),
           assignIssueTool(s),
           commentTool(s),
@@ -287,6 +296,28 @@ export class Orchestrator {
     return { requestChanges: /DECISION:\s*request_changes/i.test(judgeText), feedback: judgeText };
   }
 
+  /**
+   * Design debate (debate-v1 §2): proposer agents argue distinct designs, then a
+   * judge picks/synthesizes the best with evidence-weighted reasoning. Runs in
+   * the repo root (read-only). Returns the chosen design for decomposition.
+   */
+  private readonly debateDesign = async (question: string, options?: string[]): Promise<{ design: string }> => {
+    const angles = options && options.length > 0
+      ? options
+      : ["the simplest design that fully meets the requirement", "the most extensible / modular design", "the most robust and correct design"];
+    const proposers = angles.slice(0, this.config.debateProposers ?? 2);
+    const proposals = await Promise.all(
+      proposers.map((angle, i) => this.runDiscussant(`designer#${i + 1}`, PROPOSER_ROLE(angle), `Design question: ${question}`, this.config.workspaceRoot))
+    );
+    const design = await this.runDiscussant(
+      "design-judge",
+      DESIGN_JUDGE_ROLE,
+      `Task: ${question}\n\nProposals:\n\n${proposals.map((p, i) => `--- Proposal ${i + 1} (${proposers[i]}) ---\n${p}`).join("\n\n")}`,
+      this.config.workspaceRoot
+    );
+    return { design };
+  };
+
   private buildLoop(opts: {
     root: string;
     agentId: string;
@@ -341,6 +372,7 @@ export class Orchestrator {
       git: this.git,
       agentId: opts.agentId,
       spawnWorker: opts.isOrchestrator ? this.spawnWorker : undefined,
+      debateDesign: opts.isOrchestrator && this.config.enableDebate ? this.debateDesign : undefined,
       // Only the orchestrator faces the user, so only it can ask scoping questions.
       askUser: opts.isOrchestrator ? this.askUser : undefined,
       images: []
