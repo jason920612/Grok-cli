@@ -44,7 +44,7 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
   const replInput = new ReplInput(history);
   let useAgents = options.multiAgentDefault ?? false;
 
-  console.log(chalk.dim(`Type ${chalk.cyan("/help")} for commands, ${chalk.cyan("/exit")} to quit. Esc interrupts a running task.`));
+  console.log(chalk.dim(`Type ${chalk.cyan("/help")} for commands, ${chalk.cyan("/exit")} to quit. Esc or Ctrl+C interrupts a running task.`));
   for (;;) {
     let line: string;
     try {
@@ -86,8 +86,8 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       remember(transcript, "system", message);
-      const interrupted = /interrupt/i.test(message);
-      console.log(interrupted ? chalk.yellow(message) : chalk.red(`Error: ${message}`));
+      const interrupted = /interrupt|abort/i.test(message);
+      console.log(interrupted ? chalk.yellow("Interrupted.") : chalk.red(`Error: ${message}`));
     }
   }
   console.log(chalk.dim("Goodbye."));

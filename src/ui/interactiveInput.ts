@@ -93,9 +93,11 @@ export class ReplInput {
       /* not all TTYs support raw mode */
     }
     process.stdin.resume();
-    process.stdout.write(chalk.dim("Press Esc to interrupt the running request.\n"));
+    process.stdout.write(chalk.dim("Press Esc or Ctrl+C to interrupt the running request.\n"));
     const onKeypress = (_str: string, key: readline.Key) => {
-      if (key && key.name === "escape") controller.abort();
+      // Raw mode suppresses the automatic SIGINT, so handle Ctrl+C here too —
+      // a graceful abort instead of an abrupt exit 130 mid-task.
+      if (key && (key.name === "escape" || (key.ctrl && key.name === "c"))) controller.abort();
     };
     process.stdin.on("keypress", onKeypress);
     try {

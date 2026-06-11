@@ -6,6 +6,16 @@ import { Orchestrator } from "./agents/Orchestrator.js";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
+/**
+ * Fail before the workspace-trust prompt if no API key is configured, so the
+ * user isn't asked to make a trust decision only to hit a credentials error.
+ */
+function ensureApiKey(): void {
+  if (!process.env.XAI_API_KEY) {
+    throw new Error("Missing XAI_API_KEY. Set it with: export XAI_API_KEY='your_api_key' (or add it to .env)");
+  }
+}
+
 function isGitAvailable(): boolean {
   try {
     execFileSync("git", ["--version"], { stdio: "ignore", windowsHide: true });
@@ -96,7 +106,7 @@ async function makeAgent(opts: CliOpts, task = "", cwd = process.cwd()): Promise
     enableVerifier: opts.verifier === true ? true : undefined
   });
   const provider = createXaiProvider({ model: config.model });
-  printHeader(config.model, config.workspaceRoot);
+  printHeader(config, { multiAgent: false });
   const agent = await Agent.create(provider, config, task);
   activeSigintCleanup?.();
   const sigintHandler = async () => {
@@ -160,8 +170,7 @@ async function runTeam(task: string, opts: CliOpts): Promise<void> {
     enableVerifier: opts.verifier === true ? true : undefined
   });
   const provider = createXaiProvider({ model: config.model });
-  printHeader(config.model, config.workspaceRoot);
-  console.log("Multi-agent mode: orchestrator + parallel sub-agents (git worktrees).");
+  printHeader(config, { multiAgent: true });
   const orchestrator = new Orchestrator(provider, config, randomUUID().slice(0, 8), task);
   const result = await orchestrator.run(task);
   console.log(result.report);
@@ -175,6 +184,7 @@ async function runTeam(task: string, opts: CliOpts): Promise<void> {
 }
 
 async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void> {
+  ensureApiKey();
   // Multi-agent is the default for one-shot tasks. A non-git workspace gets a
   // throwaway git repo behind the scenes (removed after). Only fall back to a
   // single agent if git is not installed at all, or multi-agent is disabled.
@@ -195,6 +205,7 @@ async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void>
 }
 
 async function runInteractive(opts: CliOpts): Promise<void> {
+  ensureApiKey();
   if (!(await ensureWorkspaceTrusted(process.cwd()))) {
     console.log(chalk.yellow("Workspace not trusted — interactive session cancelled. Run grok-code again to retry."));
     return;
@@ -211,6 +222,7 @@ async function runInteractive(opts: CliOpts): Promise<void> {
 }
 
 async function runResume(sessionId: string | undefined, opts: CliOpts): Promise<void> {
+  ensureApiKey();
   if (!(await ensureWorkspaceTrusted(process.cwd()))) {
     console.log(chalk.yellow("Workspace not trusted — resume cancelled. Run grok-code again to retry."));
     return;
