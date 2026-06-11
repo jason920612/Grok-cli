@@ -41,7 +41,7 @@ For any task that CHANGES files, you delegate. Process:
 1. PLAN FIRST — before doing anything else, call update_plan with the decomposition: break the task into the SMALLEST independent sub-tasks (by feature / by file / by layer). A large or multi-feature request MUST become several sub-tasks; never treat "add many features" as one lump. Keep the plan updated (one step in_progress at a time) as work proceeds.
 2. Open an issue per sub-task, then EXECUTE THEM IN PARALLEL: when sub-tasks touch NON-OVERLAPPING files, call spawn_agents ONCE with ALL of them so the workers run concurrently — do NOT spawn one worker, wait, then spawn the next. Use a single spawn_agent only when there is genuinely just one sub-task. Each worker gets a focused role and a precise, NARROW brief (one sub-task — never hand one worker the whole feature set). Workers run in isolated git worktrees and open a PR when done.
 NEVER pass a big multi-part task to a single worker. If you catch yourself writing a brief with "and also…", split it into more workers. Each worker has a TIGHT step budget (~30 steps) for ONE focused sub-task — do not create a "bootstrap"/"set up everything" worker; if scaffolding is needed, make it one small worker, then spawn the feature workers in parallel. If a worker reports it hit its budget without finishing, split that sub-task further and spawn several workers for the pieces.
-3. When a worker's PR is open, review_pr it; if good, merge_pr. On a merge conflict, the merge is aborted and conflicts reported — reassign or serialize the conflicting work.
+3. Each worker's PR is automatically reviewed by INDEPENDENT adversarial critics (and a judge) who hunt for real defects; the worker gets a revision round if changes are requested. Read their review (posted on the PR), then review_pr and, if good, merge_pr. On a merge conflict, the merge is aborted and conflicts reported — reassign or serialize the conflicting work.
 4. Maintain the issues as your plan. Do NOT give a final answer while issues remain open.
 5. VERIFY before sign-off: every worker's PR must state how it was verified (tests/run/syntax-check). If a worker did not actually exercise its code, send it back or spawn a short verification worker to run the integrated result end-to-end (run tests, execute the program, or syntax-check). Do NOT declare success on unverified code.
 6. When all work is integrated and verified, give a concise final summary of what was done and how it was checked.
@@ -53,6 +53,14 @@ VERIFY before you finish: actually exercise what you built with run_python — r
 Discuss on the board (comment) if blocked or you need clarification; @mention the orchestrator.
 You have a TIGHT step budget (~30 steps) — your sub-task should be small enough to finish well within it. If you discover it is larger than expected, do the core piece, open a PR for that, and note clearly in the PR body what remains so the orchestrator can spawn follow-up workers. Do not try to do everything yourself.
 When your task is complete AND verified, call open_pr with a clear summary that states what you verified and links your issue. That is your completion signal.`;
+
+const CRITIC_ROLE = (target: string) => `You are an INDEPENDENT, adversarial code reviewer for worker "${target}". You did NOT write this code.
+Read the worker's changes (git_diff, read_file_range) and hunt for REAL problems: bugs, regressions, unhandled cases, missing or fake verification, security issues, scope drift, or claims not backed by evidence. Assume there IS a problem and try to prove it; cite concrete evidence (file:line + the actual code). Do not nitpick style.
+End your reply with exactly one line "VERDICT: approve" or "VERDICT: request_changes", then a short numbered list of the concrete must-fix issues (empty if approve).`;
+
+const JUDGE_ROLE = `You are a NEUTRAL judge. Several independent reviewers gave verdicts on a PR.
+Decide APPROVE or REQUEST_CHANGES. Default to the MAJORITY verdict — BUT weigh the EVIDENCE: if a minority cites decisively stronger, concrete evidence of a real defect, side with them. Explicitly guard against a misled majority (do not just count votes).
+Justify briefly citing the strongest evidence. End with exactly one line "DECISION: approve" or "DECISION: request_changes", then the consolidated must-fix issues.`;
 
 export type OrchestratorResult = { report: string; integrationBranch: string; diff: string; ephemeral: boolean; applied: boolean };
 
@@ -213,14 +221,79 @@ export class Orchestrator {
         });
       }
     }
+
+    // Adversarial PR review (debate-v1): independent critics + judge. On
+    // request_changes, give the worker ONE revision round with the feedback.
+    if (this.config.enableDebate && pr && !this.runSignal?.aborted) {
+      const review = await this.critique(spec, dir);
+      this.board.comment("pr", pr.number, { author: `review:${spec.name}`, body: review.feedback.slice(0, 1500) });
+      if (review.requestChanges && !this.runSignal?.aborted) {
+        const reviseLoop = this.buildLoop({
+          root: dir,
+          agentId: spec.name,
+          role: `${WORKER_BASE(spec.name)}\n\nYour role:\n${spec.role}`,
+          isOrchestrator: false,
+          extraTools: (s) => [openPrTool(s), commentTool(s), openIssueTool(s), sendDmTool(s)]
+        });
+        try {
+          summary = await reviseLoop.run(`Reviewers requested changes on your PR. Address each point concretely, then re-verify:\n${review.feedback}`, true, this.runSignal);
+          this.git.commitWorker(spec.name, `revisions by ${spec.name}`);
+          summary += "\n\n[review] changes were requested and addressed in one revision round.";
+        } catch (error) {
+          summary += `\n\n[review] revision round did not complete: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      } else {
+        summary += "\n\n[review] approved by independent critics.";
+      }
+    }
     return { prNumber: pr?.number, summary };
   };
+
+  /** Run a read-only discussant (critic / judge) and return its text. Never throws. */
+  private async runDiscussant(name: string, role: string, brief: string, root: string): Promise<string> {
+    const loop = this.buildLoop({ root, agentId: name, role, isOrchestrator: false, readOnly: true, extraTools: (s) => [commentTool(s)] });
+    try {
+      return await loop.run(brief, true, this.runSignal);
+    } catch (error) {
+      return `(${name} could not complete: ${error instanceof Error ? error.message : String(error)})`;
+    }
+  }
+
+  /**
+   * Adversarial PR review (debate-v1 §1): N independent critics hunt for problems
+   * in the worker's diff; when there are several, a neutral judge decides with
+   * evidence-weighted majority. Returns whether changes are required + feedback.
+   */
+  private async critique(spec: { name: string; role: string; brief: string }, dir: string): Promise<{ requestChanges: boolean; feedback: string }> {
+    const n = Math.max(1, this.config.debateCritics ?? 2);
+    const reviews = await Promise.all(
+      Array.from({ length: n }, (_, i) =>
+        this.runDiscussant(
+          `critic:${spec.name}#${i + 1}`,
+          CRITIC_ROLE(spec.name),
+          `Adversarially review worker "${spec.name}"'s changes (its brief was: ${spec.brief}). Find real defects with evidence.`,
+          dir
+        )
+      )
+    );
+    const verdicts = reviews.map((r) => /VERDICT:\s*request_changes/i.test(r));
+    if (n === 1) return { requestChanges: verdicts[0], feedback: reviews[0] };
+    const judgeText = await this.runDiscussant(
+      `judge:${spec.name}`,
+      JUDGE_ROLE,
+      `Reviewers' verdicts on worker "${spec.name}"'s PR:\n\n${reviews.map((r, i) => `--- Reviewer ${i + 1} ---\n${r}`).join("\n\n")}`,
+      dir
+    );
+    return { requestChanges: /DECISION:\s*request_changes/i.test(judgeText), feedback: judgeText };
+  }
 
   private buildLoop(opts: {
     root: string;
     agentId: string;
     role: string;
     isOrchestrator: boolean;
+    /** Read-only discussant (critic/proposer/judge): strip mutating/shell tools like the orchestrator. */
+    readOnly?: boolean;
     extraTools: (skills: ToolSkillRegistry) => AgentTool[];
   }): AgentLoop {
     const sandbox = new WorkspaceSandbox(opts.root, this.config.sandboxProfile, this.config.workspaceTrusted);
@@ -232,13 +305,14 @@ export class Orchestrator {
     // Strip every workspace-mutating / shell tool from its registry (derived
     // from TOOL_EFFECTS so new tools are classified automatically).
     const mutating = (name: string) => TOOL_EFFECTS[name]?.modifiesWorkspace || TOOL_EFFECTS[name]?.isShell;
-    const allowedNames = opts.isOrchestrator ? LOCAL_TOOL_NAMES.filter((n) => !mutating(n)) : LOCAL_TOOL_NAMES;
+    const stripMutating = opts.isOrchestrator || Boolean(opts.readOnly);
+    const allowedNames = stripMutating ? LOCAL_TOOL_NAMES.filter((n) => !mutating(n)) : LOCAL_TOOL_NAMES;
     const toolSkills = new ToolSkillRegistry(opts.root);
     toolSkills.loadBuiltin(allowedNames);
     const fullTools = createLocalToolRegistry(toolSkills);
     const tools = new ToolRegistry();
     for (const tool of fullTools.list()) {
-      if (opts.isOrchestrator && mutating(tool.name)) continue;
+      if (stripMutating && mutating(tool.name)) continue;
       tools.register(tool);
     }
     for (const tool of opts.extraTools(toolSkills)) tools.register(tool);
