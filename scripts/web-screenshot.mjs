@@ -94,6 +94,22 @@ async function main() {
   const serverAsk = await startWebServer({ agent: fakeAgent, demoEvents: [...DEMO_EVENTS.slice(0, 3), ASK_EVENT], openBrowser: false });
   await shot(page, serverAsk, [], "03-ask-user.png");
 
+  // 5b. ask_user with MANY questions — Submit must stay visible (sticky footer).
+  const manyAsk = {
+    type: "request", id: "askN", kind: "ask_user",
+    payload: { questions: [
+      { question: "遊戲範圍：單人還是多人線上？", options: ["單人模式就好", "需要完整多人線上", "先單人可玩，再考慮多人"] },
+      { question: "設計優先：簡單快速還是可擴展性／性能／美觀？", options: ["簡單快速可玩", "可擴展性與模組化", "性能優先", "美觀與動畫效果"] },
+      { question: "核心功能：要哪些 agar.io 特性？", options: ["基本吃球與避開就好", "要完整 Agar.io 核心特性（分裂、噴射等）", "基本+排行榜+簡單AI"] },
+      { question: "技術堆疊：純原生還是加框架／多人後端？", options: ["純原生 JS+Canvas", "Node.js + Socket.io 多人", "使用遊戲框架（Phaser 等）"] },
+      { question: "部署與用法：只要本地玩還是要可線上分享？", options: ["本地開啟即可", "要可線上分享的版本"] },
+      { question: "視覺風格：要哪種主題？", options: ["極簡深色", "鮮豔卡通", "霓虹電競風"] }
+    ] }
+  };
+  const serverMany = await startWebServer({ agent: fakeAgent, demoEvents: [DEMO_EVENTS[0], manyAsk], openBrowser: false });
+  await shot(page, serverMany, [], "06-ask-many.png");
+  await serverMany.close();
+
   // 5. Workspace-trust card.
   const trustEvent = { type: "trust", workspace: "C:/Users/jason/Desktop/Grok-cli", current: "Not trusted" };
   const serverTrust = await startWebServer({ agent: fakeAgent, demoEvents: [DEMO_EVENTS[0], trustEvent], openBrowser: false });
