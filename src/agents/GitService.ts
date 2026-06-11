@@ -22,6 +22,7 @@ export class GitService {
   private readonly base: string;
 
   private readonly ns: string;
+  private readonly workers: string[] = [];
 
   constructor(private readonly repoRoot: string, runId: string) {
     this.base = path.join(os.tmpdir(), `grok-agents-${runId}`);
@@ -48,6 +49,7 @@ export class GitService {
     const branch = this.workerBranch(name);
     const res = this.run(["worktree", "add", "-b", branch, dir, this.integrationBranch], this.repoRoot);
     if (!res.ok) throw new Error(`git: failed to create worktree for ${name}: ${res.stderr}`);
+    this.workers.push(name);
     return { dir, branch };
   }
 
@@ -89,9 +91,16 @@ export class GitService {
     return this.run(["diff", "--stat", `HEAD..${this.integrationBranch}`], this.repoRoot).stdout.trim();
   }
 
+  /** Remove all worktrees and worker branches. The integration branch is kept for the user to review/merge. */
   teardown(): void {
+    for (const name of this.workers) {
+      this.run(["worktree", "remove", "--force", this.workerDir(name)], this.repoRoot);
+    }
     this.run(["worktree", "remove", "--force", this.integrationDir], this.repoRoot);
     this.run(["worktree", "prune"], this.repoRoot);
+    for (const name of this.workers) {
+      this.run(["branch", "-D", this.workerBranch(name)], this.repoRoot);
+    }
     try {
       fs.rmSync(this.base, { recursive: true, force: true });
     } catch {

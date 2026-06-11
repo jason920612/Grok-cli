@@ -80,6 +80,9 @@ export function parseCodexPatch(text: string): CodexPatch {
     }
     if (!current) continue; // stray lines before the first action
     if (current.type === "add") {
+      // Skip unified-diff / envelope noise a model may echo into an Add File
+      // body (e.g. "@@", "+++ path", "--- path", "++ path"); keep real content.
+      if (/^@@/.test(trimmed) || /^\+{2,}[ \t]/.test(line) || /^(---|diff |index )/.test(line)) continue;
       current.lines.push(line.startsWith("+") ? line.slice(1) : line);
       continue;
     }

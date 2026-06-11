@@ -56,6 +56,19 @@ test("uses the @@ header to disambiguate repeated context", () => {
   assert.match(result, /function b\(\) \{\n {2}return 2;/);
 });
 
+test("Add File ignores diff/envelope noise the model may echo", () => {
+  const patch = wrap(
+    "*** Add File: src/utils/slugify.ts",
+    "++ src/utils/slugify.ts",
+    "@@",
+    "+export function slugify(text) {",
+    "+  return text;",
+    "+}"
+  );
+  const { actions } = parseCodexPatch(patch);
+  assert.deepEqual(actions[0].lines, ["export function slugify(text) {", "  return text;", "}"]);
+});
+
 test("throws when a hunk cannot be located", () => {
   const { actions } = parseCodexPatch(wrap("*** Update File: f", "@@", "-nonexistent line", "+x"));
   assert.throws(() => applyCodexUpdate("real content\n", actions[0].hunks), /Could not locate/);

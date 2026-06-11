@@ -28,7 +28,7 @@ Apply file changes using the context-located apply_patch envelope (NOT unified d
 - Copy context and removed lines verbatim from what you read (indentation matters; minor whitespace drift is tolerated).
 - Include 1–3 unchanged context lines around your change so the hunk locates unambiguously. If a change site is repeated, add an `@@ <header>` line naming the enclosing function/section.
 - Keep patches minimal and on-task; do not rewrite unrelated code.
-- For a brand-new file use `*** Add File:` (every line prefixed with `+`); to remove a file use `*** Delete File:`.
+- For a brand-new file use `*** Add File: <path>` followed by the file's lines, EACH prefixed with a single `+`. Do NOT add `@@`, `+++`, `---`, or repeat the filename inside an Add File body. To remove a file use `*** Delete File: <path>`.
 - After success, run git_diff and the smallest relevant checks.
 
 ## On failure
