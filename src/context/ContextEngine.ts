@@ -235,6 +235,21 @@ export class ContextEngine {
     this.existence.add(norm);
   }
 
+  /**
+   * True if this exact region was already read, the read has NOT been
+   * invalidated by a later write (`stale`), and the content is unchanged
+   * (same hash). Backs the duplicate-read guard: re-reading an identical,
+   * unchanged region wastes the step budget and bloats the transcript, so the
+   * read tool refuses it and points the model at what it already has.
+   */
+  hasFreshRead(path: string, startLine: number, endLine: number, content: string): boolean {
+    const norm = normalizePath(path);
+    const hash = hashContent(content);
+    return this.reads.some(
+      (r) => r.path === norm && !r.stale && r.startLine === startLine && r.endLine === endLine && r.contentHash === hash
+    );
+  }
+
   /** Register paths seen via listing/search/overview/status; backs `delete`. */
   recordExistence(paths: string[]): void {
     for (const path of paths) this.existence.add(normalizePath(path));
