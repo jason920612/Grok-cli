@@ -9,13 +9,16 @@
  */
 import chalk from "chalk";
 
+export type PlanStep = { step: string; status: "pending" | "in_progress" | "completed" };
+
 export type AgentEvent =
   | { type: "step"; step: number; message: string }
   | { type: "info"; message: string }
   | { type: "warn"; message: string }
   | { type: "tool_batch"; step: number; message: string }
   | { type: "verifier"; message: string }
-  | { type: "model_text"; message: string };
+  | { type: "model_text"; message: string }
+  | { type: "plan"; message: string; steps: PlanStep[] };
 
 export interface AgentEventSink {
   emit(event: AgentEvent): void;

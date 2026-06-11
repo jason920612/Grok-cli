@@ -51,10 +51,27 @@
     overflow-y: auto; padding: 12px; font-size: 12px;
   }
   #side h3 { margin: 4px 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); }
-  .act { padding: 2px 0; color: var(--text); white-space: pre-wrap; word-break: break-word; }
-  .act .who { font-weight: 600; }
-  .act.worker { padding-left: 12px; color: var(--dim); }
-  .act.warn { color: var(--yellow); } .act.verifier { color: var(--magenta); }
+  .panel { margin-bottom: 16px; }
+  .prog { color: var(--green); font-weight: 600; }
+  .muted { color: var(--dim); }
+  /* Plan checklist */
+  .pstep { display: flex; gap: 8px; padding: 3px 0; align-items: baseline; }
+  .pstep .ico { width: 16px; flex-shrink: 0; text-align: center; }
+  .pstep.done .ico { color: var(--green); } .pstep.done .txt { color: var(--dim); text-decoration: line-through; }
+  .pstep.active .ico { color: var(--yellow); } .pstep.active .txt { color: var(--text); font-weight: 600; }
+  .pstep.pending .ico { color: var(--dim); } .pstep.pending .txt { color: var(--dim); }
+  /* Per-agent cards */
+  .agent { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+  .agent .ahead { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--panel2); }
+  .agent .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex-shrink: 0; }
+  .agent.running .dot { background: var(--green); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+  .agent .aname { font-weight: 600; }
+  .agent .astep { margin-left: auto; color: var(--dim); font-size: 11px; }
+  .agent .alog { padding: 4px 10px; max-height: 160px; overflow-y: auto; }
+  .agent .aline { padding: 1px 0; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
+  .agent .aline.warn { color: var(--yellow); } .agent .aline.verifier { color: var(--magenta); }
+  .agent .aline.cur { color: var(--text); }
 
   .msg { max-width: 80%; padding: 9px 13px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; }
   .msg.user { align-self: flex-end; background: #1f6feb33; border: 1px solid #1f6feb55; }
@@ -134,7 +151,16 @@
 </header>
 <main>
   <div id="chat"></div>
-  <div id="side"><h3>Activity</h3><div id="acts"></div></div>
+  <div id="side">
+    <div id="plan-panel" class="panel" style="display:none">
+      <h3>Plan <span id="plan-prog" class="prog"></span></h3>
+      <div id="plan"></div>
+    </div>
+    <div class="panel">
+      <h3>Agents</h3>
+      <div id="agents"><div class="muted">No agent activity yet.</div></div>
+    </div>
+  </div>
 </main>
 <footer>
   <div id="ac" class="ac"></div>
@@ -148,7 +174,11 @@ let SESSION = "";
 const sessParam = () => (SESSION ? "&session=" + encodeURIComponent(SESSION) : "");
 const q = (p, b) => fetch(p + "?t=" + token + sessParam(), b && { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
 const chat = document.getElementById("chat");
-const acts = document.getElementById("acts");
+const agentsEl = document.getElementById("agents");
+const planEl = document.getElementById("plan");
+const planPanel = document.getElementById("plan-panel");
+const planProg = document.getElementById("plan-prog");
+const AGENTS = new Map();
 const input = document.getElementById("input");
 const elModel = document.getElementById("model");
 const elWs = document.getElementById("ws");
@@ -284,15 +314,52 @@ function respond(id, body) {
   if (card) { card.classList.add("resolved"); card.querySelectorAll("button,input").forEach((b) => (b.disabled = true)); }
 }
 
+function agentCard(name) {
+  let a = AGENTS.get(name);
+  if (a) return a;
+  const placeholder = agentsEl.querySelector(".muted");
+  if (placeholder) placeholder.remove();
+  const el = document.createElement("div");
+  el.className = "agent running";
+  el.innerHTML = "<div class=ahead><span class=dot></span><span class=aname></span><span class=astep></span></div><div class=alog></div>";
+  el.querySelector(".aname").textContent = name;
+  agentsEl.appendChild(el);
+  a = { el, log: el.querySelector(".alog"), step: el.querySelector(".astep"), steps: 0 };
+  AGENTS.set(name, a);
+  return a;
+}
 function addAct(ev) {
-  const stick = chat; // activity panel scrolls itself
-  const d = document.createElement("div");
-  const worker = ev.agent.startsWith("worker:");
-  d.className = "act " + (worker ? "worker " : "") + (ev.kind === "warn" ? "warn " : ev.kind === "verifier" ? "verifier" : "");
-  d.innerHTML = "<span class=who>[" + esc(ev.agent) + "]</span> " + esc(ev.message);
-  acts.appendChild(d);
-  acts.scrollTop = acts.scrollHeight;
-  while (acts.children.length > 400) acts.removeChild(acts.firstChild);
+  const a = agentCard(ev.agent);
+  a.el.classList.add("running");
+  if (ev.kind === "tool_batch") { a.steps++; a.step.textContent = a.steps + (a.steps === 1 ? " step" : " steps"); }
+  const line = document.createElement("div");
+  line.className = "aline " + (ev.kind === "warn" ? "warn" : ev.kind === "verifier" ? "verifier" : ev.kind === "tool_batch" ? "cur" : "");
+  line.textContent = ev.message;
+  a.log.appendChild(line);
+  while (a.log.children.length > 8) a.log.removeChild(a.log.firstChild);
+  a.log.scrollTop = a.log.scrollHeight;
+}
+function addPlan(ev) {
+  const steps = ev.steps || [];
+  planPanel.style.display = "block";
+  planProg.textContent = steps.filter((s) => s.status === "completed").length + "/" + steps.length;
+  planEl.innerHTML = "";
+  for (const s of steps) {
+    const cls = s.status === "completed" ? "done" : s.status === "in_progress" ? "active" : "pending";
+    const ico = s.status === "completed" ? "✓" : s.status === "in_progress" ? "▶" : "○";
+    const d = document.createElement("div");
+    d.className = "pstep " + cls;
+    d.innerHTML = "<span class=ico>" + ico + "</span><span class=txt></span>";
+    d.querySelector(".txt").textContent = s.step;
+    planEl.appendChild(d);
+  }
+}
+function resetAgents() {
+  AGENTS.clear();
+  agentsEl.innerHTML = "<div class=muted>Working…</div>";
+}
+function endAgents() {
+  for (const a of AGENTS.values()) a.el.classList.remove("running");
 }
 
 function setMode(agents, yes) {
@@ -367,7 +434,10 @@ function handle(ev) {
     case "activity": addAct(ev); break;
     case "request": addRequest(ev); break;
     case "request_resolved": { const c = chat.querySelector(".card[data-id='" + ev.id + "']"); if (c) { c.classList.add("resolved"); c.querySelectorAll("button,input").forEach((b) => (b.disabled = true)); } break; }
-    case "task": document.body.classList.toggle("running", ev.status === "running");
+    case "task":
+      document.body.classList.toggle("running", ev.status === "running");
+      if (ev.status === "running") resetAgents();
+      else endAgents();
       if (ev.status === "error") addMsg("error", "Error: " + (ev.message || "")); break;
     case "changes": addChanges(ev.files); break;
     case "usage": elUsage.textContent = ev.line; break;
@@ -375,6 +445,7 @@ function handle(ev) {
     case "output": addOutput(ev.title, ev.text); break;
     case "state": applyState(ev); break;
     case "trust": addTrust(ev); break;
+    case "plan": addPlan(ev); break;
   }
 }
 
@@ -437,7 +508,9 @@ async function switchTo(id) {
   SESSION = id;
   await q("/api/sessions/activate", { id });
   chat.innerHTML = "";
-  acts.innerHTML = "";
+  AGENTS.clear();
+  agentsEl.innerHTML = "<div class=muted>No agent activity yet.</div>";
+  planPanel.style.display = "none";
   await refreshState();
   connect();
 }

@@ -191,6 +191,19 @@ export class AgentLoop {
       const out = await executor.executeOne(call, state.step, signal);
       messages.push({ role: "tool", toolCallId: call.id, content: out.output });
 
+      // Surface the maintained plan to the UI (progress panel) when it changes.
+      if (call.name === "update_plan") {
+        try {
+          const parsed = JSON.parse(call.argsJson);
+          if (Array.isArray(parsed?.plan)) {
+            const done = parsed.plan.filter((p: { status: string }) => p.status === "completed").length;
+            this.events.emit({ type: "plan", message: `Plan ${done}/${parsed.plan.length} done`, steps: parsed.plan });
+          }
+        } catch {
+          /* ignore malformed plan args */
+        }
+      }
+
       // Analysis-paralysis nudge: after a run of inspection with no mutation.
       noProgressStreak = executor.lastProgress ? 0 : noProgressStreak + 1;
       if (noProgressStreak >= TUNING.guard.actionNudgeAfterNoProgress) {

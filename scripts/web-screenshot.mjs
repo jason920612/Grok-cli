@@ -28,6 +28,12 @@ const DEMO_EVENTS = [
   { type: "usage", line: "in 18.4k (cached 14.2k, 77% hit) · out 2.1k · 9 calls" },
   { type: "chat", role: "user", text: "做一個能夠抓取美國 SEC 公開的上市公司相關資訊的網頁" },
   { type: "activity", agent: "orchestrator", kind: "tool_batch", message: "step 1: inspect_environment" },
+  { type: "plan", agent: "orchestrator", steps: [
+    { step: "Design the EDGAR lookup page", status: "completed" },
+    { step: "Build index.html (markup + UI)", status: "in_progress" },
+    { step: "Build app.js (fetch + render filings)", status: "in_progress" },
+    { step: "Verify in a browser", status: "pending" }
+  ] },
   { type: "activity", agent: "orchestrator", kind: "tool_batch", message: "step 2: open_issue #1 (scrape SEC EDGAR)" },
   { type: "activity", agent: "orchestrator", kind: "tool_batch", message: "step 3: spawn_agents (html, js)" },
   { type: "activity", agent: "worker:html", kind: "tool_batch", message: "step 1: apply_patch index.html" },

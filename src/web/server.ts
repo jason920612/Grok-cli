@@ -42,7 +42,8 @@ export type WebEvent =
   | { type: "mode"; agents: boolean; yes: boolean }
   | { type: "output"; title: string; text: string }
   | { type: "state"; model: string; workspace: string; approval: string; agents: boolean; yes: boolean }
-  | { type: "trust"; workspace: string; current: string };
+  | { type: "trust"; workspace: string; current: string }
+  | { type: "plan"; agent: string; steps: Array<{ step: string; status: string }> };
 
 export type WebServerOptions = {
   agent: Agent;
@@ -81,6 +82,10 @@ const stripAnsi = (s: string) => s.replace(ANSI_RE, "");
 class WebEventSink implements AgentEventSink {
   constructor(private readonly label: string, private readonly emitWeb: (ev: WebEvent) => void) {}
   emit(event: AgentEvent): void {
+    if (event.type === "plan") {
+      this.emitWeb({ type: "plan", agent: this.label, steps: event.steps });
+      return;
+    }
     this.emitWeb({ type: "activity", agent: this.label, kind: event.type, message: stripAnsi(event.message) });
   }
 }
