@@ -32,6 +32,7 @@ export const TOOL_EFFECTS: Record<string, ToolEffects> = {
   forget: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },
   note_user_level: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },
   ask_user: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },
+  update_plan: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },
   run_python: { readOnly: false, modifiesWorkspace: false, isShell: true, countsAsProgress: false },
   start_background_command: { readOnly: false, modifiesWorkspace: false, isShell: true, countsAsProgress: false },
   stop_background_command: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },

@@ -5,6 +5,7 @@ export type ContextItem = {
   id: string;
   type:
     | "user_task"
+    | "plan"
     | "system_instruction"
     | "general_skill"
     | "tool_skill"

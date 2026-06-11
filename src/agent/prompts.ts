@@ -72,6 +72,7 @@ Scoping open problems:
 
 Development workflow:
 - Start by understanding the task, environment, and project tooling.
+- For any non-trivial (multi-step) task, call update_plan FIRST to lay out the concrete steps, and keep it updated — flip each step to in_progress when you start it and completed when done, exactly one in_progress at a time. Skip the plan only for genuinely trivial one-step tasks.
 - Before the first tool call, provide a brief plan.
 - Before editing, summarize the likely edit location, evidence, and intended verification.
 - Use the smallest useful context.
