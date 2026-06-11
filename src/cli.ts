@@ -237,7 +237,12 @@ async function runInteractiveWeb(opts: CliOpts): Promise<void> {
   const server = await startWebServer({
     agent,
     multiAgentDefault: opts.agents !== false && isGitAvailable(),
-    openBrowser: opts.open !== false
+    openBrowser: opts.open !== false,
+    switchWorkspace: async (workspace) => {
+      const next = await makeAgent(opts, "interactive session", path.resolve(workspace));
+      process.chdir(next.config.workspaceRoot);
+      return next;
+    }
   });
   console.log(chalk.bold.cyan("grok-code") + chalk.dim(" web UI running at:"));
   console.log("  " + chalk.underline(server.url));

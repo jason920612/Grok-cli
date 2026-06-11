@@ -85,7 +85,12 @@ async function main() {
     await p.locator(".filecard .fhead").first().click();
   });
 
-  // 3. ask_user card.
+  // 3. Commands menu open (GUI access to all slash commands).
+  await shot(page, server, DEMO_EVENTS, "04-commands-menu.png", async (p) => {
+    await p.click("#cmds");
+  });
+
+  // 4. ask_user card.
   const serverAsk = await startWebServer({ agent: fakeAgent, demoEvents: [...DEMO_EVENTS.slice(0, 3), ASK_EVENT], openBrowser: false });
   await shot(page, serverAsk, [], "03-ask-user.png");
 

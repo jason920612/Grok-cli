@@ -57,6 +57,51 @@ test("SSE stream replays the buffered events on connect", async () => {
   });
 });
 
+async function collectSse(base, token, predicate, timeoutMs = 2500) {
+  const res = await fetch(`${base}/api/events?t=${token}`);
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  const start = Date.now();
+  try {
+    while (Date.now() - start < timeoutMs) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      if (predicate(buf)) return buf;
+    }
+  } finally {
+    await reader.cancel();
+  }
+  return buf;
+}
+
+test("state endpoint exposes the command list and approval modes", async () => {
+  await withServer(async ({ base, token }) => {
+    const st = await (await fetch(`${base}/api/state?t=${token}`)).json();
+    assert.ok(Array.isArray(st.commands) && st.commands.some((c) => c.name === "/status"));
+    assert.ok(st.approvalModes.includes("auto-all"));
+  });
+});
+
+test("a /status command emits an output event over SSE", async () => {
+  await withServer(async ({ base, token }) => {
+    const sse = collectSse(base, token, (b) => b.includes('"type":"output"'));
+    await fetch(`${base}/api/message?t=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "/status" }) });
+    const buf = await sse;
+    assert.match(buf, /"type":"output"/);
+    assert.match(buf, /Status/);
+  });
+});
+
+test("/approval command changes the mode", async () => {
+  await withServer(async ({ base, token, agent }) => {
+    await fetch(`${base}/api/message?t=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "/approval auto-safe" }) });
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(agent.approval.mode, "auto-safe");
+  });
+});
+
 test("toggle flips always-approve to auto-all and back", async () => {
   await withServer(async ({ base, token, agent }) => {
     await fetch(`${base}/api/toggle?t=${token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ yes: true }) });

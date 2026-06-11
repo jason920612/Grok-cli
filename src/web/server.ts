@@ -11,6 +11,13 @@ import { Orchestrator } from "../agents/Orchestrator.js";
 import type { ApprovalPrompter } from "../approval/ApprovalPolicy.js";
 import type { ApprovalMode } from "../config/loadConfig.js";
 import { collectWorkingTreeDiff, type FileDiff } from "../ui/diffBrowser.js";
+import { formatSessionStatus } from "../ui/terminal.js";
+import { formatWorkspaceTrustStatus } from "../ui/workspaceTrust.js";
+import { formatContext } from "../ui/formatters.js";
+import { visibleSlashCommands } from "../ui/slashCommands.js";
+import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
+
+const APPROVAL_MODES: ApprovalMode[] = ["on-request", "auto-local", "auto-safe", "auto-all", "never"];
 
 /**
  * Web UI backend (web-ui-v1.md).
@@ -30,7 +37,9 @@ export type WebEvent =
   | { type: "task"; status: "running" | "done" | "error" | "interrupted"; message?: string }
   | { type: "changes"; files: Array<{ path: string; status: string; additions: number; deletions: number; body: string }> }
   | { type: "usage"; line: string }
-  | { type: "mode"; agents: boolean; yes: boolean };
+  | { type: "mode"; agents: boolean; yes: boolean }
+  | { type: "output"; title: string; text: string }
+  | { type: "state"; model: string; workspace: string; approval: string; agents: boolean; yes: boolean };
 
 export type WebServerOptions = {
   agent: Agent;
@@ -40,6 +49,8 @@ export type WebServerOptions = {
   openBrowser?: boolean;
   /** Pre-baked events for screenshot/demo runs — no live agent calls. */
   demoEvents?: WebEvent[];
+  /** Build a fresh agent for a different workspace (the /cd command). */
+  switchWorkspace?: (workspace: string) => Promise<Agent>;
 };
 
 export type WebServer = {
@@ -59,7 +70,7 @@ class WebEventSink implements AgentEventSink {
 }
 
 export async function startWebServer(opts: WebServerOptions): Promise<WebServer> {
-  const agent = opts.agent;
+  let agent = opts.agent;
   const token = randomUUID().replace(/-/g, "");
   const buffer: WebEvent[] = [...(opts.demoEvents ?? [])];
   const clients = new Set<http.ServerResponse>();
@@ -101,8 +112,22 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
       emit({ type: "request", id, kind: "ask_user", payload: { questions } });
     });
 
-  agent.askUser = webAskUser;
-  agent.approval.prompter = webPrompter;
+  const wire = (a: Agent): void => {
+    a.askUser = webAskUser;
+    a.approval.prompter = webPrompter;
+  };
+  wire(agent);
+
+  const stateEvent = (): WebEvent => ({
+    type: "state",
+    model: agent.config.model,
+    workspace: agent.config.workspaceRoot,
+    approval: agent.approval.mode,
+    agents: useAgents,
+    yes: agent.approval.mode === "auto-all"
+  });
+
+  const out = (title: string, text: string): void => emit({ type: "output", title, text });
 
   const diffFingerprint = (f: FileDiff) => `${f.status}:${f.additions}:${f.deletions}`;
 
@@ -160,6 +185,116 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
     }
   };
 
+  // Slash commands → GUI/web equivalents of the old TUI commands.
+  const handleCommand = async (raw: string): Promise<void> => {
+    const [name, ...rest] = raw.trim().split(/\s+/);
+    const arg = rest.join(" ");
+    const ctx = () => agent.toolContext();
+    emit({ type: "chat", role: "user", text: raw });
+    switch (name) {
+      case "/help":
+        out("Commands", visibleSlashCommands().map((c) => `${c.usage.padEnd(22)} ${c.description}`).join("\n"));
+        break;
+      case "/status":
+        out("Status", [
+          formatSessionStatus(agent.config),
+          stripAnsi(formatWorkspaceTrustStatus(agent.config.workspaceRoot)),
+          agent.usage.hasData ? agent.usage.format() : "tokens this session: none yet"
+        ].join("\n"));
+        break;
+      case "/cd":
+      case "/workspace":
+      case "/change-dir": {
+        if (!opts.switchWorkspace) { out("Workspace", "Workspace switching is unavailable in this session."); break; }
+        if (!arg) { out("Workspace", "Usage: /cd <path>  (or use the workspace button in the header)"); break; }
+        try {
+          await agent.background.stopAll("workspace switch cleanup");
+          agent = await opts.switchWorkspace(arg);
+          wire(agent);
+          out("Workspace", `Switched to ${agent.config.workspaceRoot}`);
+          emit(stateEvent());
+        } catch (e) {
+          out("Workspace", `Could not switch: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        break;
+      }
+      case "/approval": {
+        if (arg && APPROVAL_MODES.includes(arg as ApprovalMode)) {
+          agent.approval.setMode(arg as ApprovalMode);
+          agent.config.approval = agent.approval.mode;
+          out("Approval", `Approval mode set to ${arg}.`);
+          emit(stateEvent());
+          emit({ type: "mode", agents: useAgents, yes: agent.approval.mode === "auto-all" });
+        } else {
+          out("Approval", `Current: ${agent.approval.mode}\nModes: ${APPROVAL_MODES.join(", ")}\nUsage: /approval <mode>  (or use the header dropdown)`);
+        }
+        break;
+      }
+      case "/trust":
+        out("Workspace trust", stripAnsi(formatWorkspaceTrustStatus(agent.config.workspaceRoot)));
+        break;
+      case "/git-status":
+        out("git status", asText(await agent.tools.execute("git_status", {}, ctx())));
+        break;
+      case "/diff": {
+        const files = collectWorkingTreeDiff(agent.config.workspaceRoot);
+        if (files.length === 0) out("Diff", "No changes in the working tree.");
+        else emit({ type: "changes", files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, body: f.body })) });
+        break;
+      }
+      case "/context":
+        out("Context", formatContext(agent.context.list()) || "(empty)");
+        break;
+      case "/compact":
+      case "/clear":
+        agent.context.compactContext("web session");
+        out("Context", "Context compacted — stale items summarized, pinned items kept.");
+        break;
+      case "/skills":
+        out("Skills", formatSkillsList());
+        break;
+      case "/tools":
+        out("Tools", agent.toolSkills.toolIndex());
+        break;
+      case "/env":
+        out("Environment", asText(await agent.tools.execute("inspect_environment", { includeVersions: true }, ctx())));
+        break;
+      case "/bg":
+        out("Background commands", asText(agent.background.list()));
+        break;
+      case "/bg-stop":
+        out("Background", asText(await agent.tools.execute("stop_background_command", { id: rest[0], reason: "web command" }, ctx())));
+        break;
+      case "/bg-stop-all":
+        out("Background", asText(await agent.tools.execute("stop_all_background_commands", { reason: "web command" }, ctx())));
+        break;
+      case "/drop":
+        out("Context", agent.context.drop(rest[0] ?? "") ? "dropped" : "not dropped");
+        break;
+      case "/learn-project":
+        void runTask(PROJECT_UNDERSTANDING_TASK);
+        break;
+      case "/model":
+        out("Model", "Model switching in-session isn't available yet; restart with --model <name>.");
+        break;
+      default:
+        out("Unknown command", `${name} — type /help for the list.`);
+    }
+  };
+
+  const formatSkillsList = (): string => {
+    const active = agent.skillLoader.select("web session");
+    const ids = new Set(active.map((s) => s.id));
+    const available = agent.skillLoader.loadAll().filter((s) => !ids.has(s.id));
+    const fmt = (xs: typeof active) => xs.map((s) => `- ${s.id}: ${s.description}`).join("\n") || "- none";
+    return `Loaded now:\n${fmt(active)}\n\nAvailable when triggered:\n${fmt(available)}`;
+  };
+
+  const processInput = (text: string): void => {
+    if (text.startsWith("/")) void handleCommand(text);
+    else void runTask(text);
+  };
+
   const htmlPath = resolvePublicFile("index.html");
 
   const server = http.createServer(async (req, res) => {
@@ -198,6 +333,9 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
           agents: useAgents,
           yes: agent.approval.mode === "auto-all",
           approval: agent.approval.mode,
+          approvalModes: APPROVAL_MODES,
+          canSwitchWorkspace: Boolean(opts.switchWorkspace),
+          commands: visibleSlashCommands().map((c) => ({ name: c.name, usage: c.usage, description: c.description })),
           running,
           usage: agent.usage.hasData ? agent.usage.format() : ""
         })
@@ -209,7 +347,7 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
       const body = await readJson(req);
       if (url.pathname === "/api/message") {
         const text = String(body?.text ?? "").trim();
-        if (text) void runTask(text);
+        if (text) processInput(text);
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true, queued: running }));
         return;
@@ -267,6 +405,15 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
         server.close(() => resolve());
       })
   };
+}
+
+function asText(value: unknown): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
 }
 
 function formatLap(lap: { inputTokens: number; outputTokens: number; cachedInputTokens: number; calls: number }): string {
