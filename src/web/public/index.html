@@ -318,16 +318,19 @@ function resetViewed() { viewedCard = null; viewedPaths.clear(); }
 function addViewed(ev) {
   if (viewedPaths.has(ev.path)) return;
   viewedPaths.add(ev.path);
+  // Re-check stick on EVERY append: each viewed file grows the card, so if the
+  // user was following at the bottom we must keep following — otherwise the view
+  // drifts off the bottom as files stream in and the chat appears stuck.
+  const stick = atBottom();
   if (!viewedCard) {
-    const stick = atBottom();
     viewedCard = document.createElement("div");
     viewedCard.className = "msg assistant";
     viewedCard.style.maxWidth = "92%";
     viewedCard.innerHTML = "<b>👁 Viewed files</b> <span class=hint>(click a file to preview)</span>";
     chat.appendChild(viewedCard);
-    if (stick) scroll();
   }
   viewedCard.appendChild(expandableFile("<span class=caret>▶</span><b class=mono>" + esc(ev.path) + "</b>", ev.path, null));
+  if (stick) scroll();
 }
 
 function addRequest(ev) {
