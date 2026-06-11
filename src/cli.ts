@@ -168,6 +168,7 @@ export function parseConversationMode(value?: string): ConversationMode | undefi
 async function runTeam(task: string, opts: CliOpts): Promise<void> {
   const cwd = process.cwd();
   const workspaceTrusted = Boolean(new WorkspaceTrustStore().getTrustFor(cwd));
+  const toolOverrides = parseServerToolOverrides(process.argv.slice(2));
   const config = loadConfig(cwd, {
     model: opts.model,
     approval: effectiveApproval(opts),
@@ -175,6 +176,10 @@ async function runTeam(task: string, opts: CliOpts): Promise<void> {
     workspaceTrusted,
     toolChoice: opts.toolChoice,
     maxSteps: parseMaxSteps(opts.maxSteps),
+    serverTools: toolOverrides.serverTools,
+    enableWebSearch: toolOverrides.enableWebSearch,
+    enableXSearch: toolOverrides.enableXSearch,
+    conversationMode: parseConversationMode(opts.conversationMode),
     enableVerifier: opts.verifier === true ? true : undefined
   });
   const provider = createXaiProvider({ model: config.model });

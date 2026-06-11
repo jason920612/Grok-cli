@@ -234,41 +234,64 @@ export async function runDiffBrowser(files: FileDiff[]): Promise<void> {
       resolve();
     };
     const onData = (buf: Buffer) => {
-      const ev = parseInput(buf.toString("utf8"));
-      switch (ev.type) {
-        case "quit":
-          finish();
-          return;
-        case "up":
-          state.selected = Math.max(0, state.selected - 1);
-          break;
-        case "down":
-          state.selected = Math.min(state.entries.length - 1, state.selected + 1);
-          break;
-        case "toggle":
-          state.entries[state.selected].expanded = !state.entries[state.selected].expanded;
-          break;
-        case "collapse":
-          state.entries[state.selected].expanded = false;
-          break;
-        case "scroll":
-          state.scroll = Math.max(0, state.scroll + ev.delta);
-          draw();
-          return;
-        case "click": {
-          const rows = buildRows(state);
-          const idx = state.scroll + (ev.row - 1 - 1); // -1 screen→0-based, -1 title line
-          const target = rows[idx];
-          if (target) {
-            state.selected = target.entry;
-            state.entries[target.entry].expanded = !state.entries[target.entry].expanded;
+      const s = buf.toString("utf8");
+      // Fast wheel scrolling coalesces several SGR mouse reports into one chunk;
+      // process them all so no events (and no scroll distance) are dropped.
+      const mouseChunks = [...s.matchAll(/\x1b\[<\d+;\d+;\d+[Mm]/g)].map((m) => m[0]);
+      const pieces = mouseChunks.length > 0 ? mouseChunks : [s];
+      let needDraw = false;
+      let scrolled = false;
+      for (const piece of pieces) {
+        const ev = parseInput(piece);
+        switch (ev.type) {
+          case "quit":
+            finish();
+            return;
+          case "up":
+            state.selected = Math.max(0, state.selected - 1);
+            needDraw = true;
+            break;
+          case "down":
+            state.selected = Math.min(state.entries.length - 1, state.selected + 1);
+            needDraw = true;
+            break;
+          case "toggle":
+            state.entries[state.selected].expanded = !state.entries[state.selected].expanded;
+            needDraw = true;
+            break;
+          case "collapse":
+            state.entries[state.selected].expanded = false;
+            needDraw = true;
+            break;
+          case "scroll":
+            state.scroll = Math.max(0, state.scroll + ev.delta);
+            needDraw = true;
+            scrolled = true;
+            break;
+          case "click": {
+            const rows = buildRows(state);
+            const idx = state.scroll + (ev.row - 1 - 1); // -1 screen→0-based, -1 title line
+            const target = rows[idx];
+            if (target) {
+              state.selected = target.entry;
+              state.entries[target.entry].expanded = !state.entries[target.entry].expanded;
+              needDraw = true;
+            }
+            break;
           }
-          break;
+          default:
+            break;
         }
-        default:
-          return;
       }
-      clampScrollToSelection(state, height());
+      if (!needDraw) return;
+      // Wheel scrolling moves the viewport freely; only keyboard/click movement
+      // re-anchors the viewport to the selection.
+      if (!scrolled) clampScrollToSelection(state, height());
+      else {
+        const rows = buildRows(state);
+        const viewport = Math.max(1, height() - 2);
+        state.scroll = Math.max(0, Math.min(state.scroll, Math.max(0, rows.length - viewport)));
+      }
       draw();
     };
     process.stdin.on("data", onData);

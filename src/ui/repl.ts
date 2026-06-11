@@ -101,6 +101,9 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
     }
 
     try {
+      // Baseline so the post-task summary lists only what THIS task changed,
+      // not pre-existing uncommitted edits in the working tree.
+      const baseline = new Map(collectWorkingTreeDiff(agent.config.workspaceRoot).map((f) => [f.path, diffFingerprint(f)]));
       const interjections = new Interjections();
       const response = await replInput.runWithEscInterrupt(
         (signal) => (useAgents ? runReplTeam(agent, text, signal, interjections) : agent.run(text, false, signal, interjections)),
@@ -113,7 +116,7 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
       );
       remember(transcript, "assistant", String(response));
       console.log(`\n${response}\n`);
-      const changed = collectWorkingTreeDiff(agent.config.workspaceRoot);
+      const changed = collectWorkingTreeDiff(agent.config.workspaceRoot).filter((f) => baseline.get(f.path) !== diffFingerprint(f));
       if (changed.length > 0) console.log(summarizeChanges(changed));
       const lap = agent.usage.lap();
       if (lap.calls > 0) console.log(chalk.dim(formatTotals(lap)));
@@ -235,6 +238,10 @@ async function handleSlash(command: string, agent: Agent, options: ReplOptions, 
     default:
       output(`Unknown command: ${name}`);
   }
+}
+
+function diffFingerprint(f: { status: string; additions: number; deletions: number }): string {
+  return `${f.status}:${f.additions}:${f.deletions}`;
 }
 
 function remember(transcript: TranscriptEntry[], role: TranscriptEntry["role"], content: string): void {

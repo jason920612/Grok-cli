@@ -83,24 +83,27 @@ export async function mouseSelect(message: string, choices: SelectChoice[]): Pro
     };
     const onData = (buf: Buffer) => {
       const s = buf.toString("utf8");
-      const mouse = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/.exec(s);
-      if (mouse) {
-        const button = Number(mouse[1]);
-        const row = Number(mouse[3]);
-        const press = mouse[4] === "M";
-        if (button === 0 && press) {
-          const idx = clickIndex(row, startRow, choices.length);
-          if (idx >= 0) {
-            selected = idx;
-            finish(choices[idx].value);
+      // Fast wheel scrolling can coalesce several SGR reports per chunk — handle all.
+      const mouseEvents = [...s.matchAll(/\x1b\[<(\d+);(\d+);(\d+)([Mm])/g)];
+      if (mouseEvents.length > 0) {
+        for (const mouse of mouseEvents) {
+          const button = Number(mouse[1]);
+          const row = Number(mouse[3]);
+          const press = mouse[4] === "M";
+          if (button === 0 && press) {
+            const idx = clickIndex(row, startRow, choices.length);
+            if (idx >= 0) {
+              selected = idx;
+              finish(choices[idx].value);
+              return;
+            }
+          } else if (button === 64) {
+            selected = Math.max(0, selected - 1);
+          } else if (button === 65) {
+            selected = Math.min(choices.length - 1, selected + 1);
           }
-        } else if (button === 64) {
-          selected = Math.max(0, selected - 1);
-          draw();
-        } else if (button === 65) {
-          selected = Math.min(choices.length - 1, selected + 1);
-          draw();
         }
+        draw();
         return;
       }
       if (s === "\x1b[A" || s === "k") {

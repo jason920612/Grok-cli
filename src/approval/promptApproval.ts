@@ -48,6 +48,10 @@ export async function promptApproval(command: string, reason: string, risk: Comm
   ]);
   if (choice === "allow_once") return { approved: true, rememberSimilar: false };
   if (choice === "allow_similar") return { approved: true, rememberSimilar: true };
+  if (choice === null) {
+    // Esc/cancel — deny cleanly without forcing the user to type guidance.
+    return { approved: false, rememberSimilar: false, guidance: "User dismissed the approval prompt. Use a safer project-local approach that does not require this approval." };
+  }
   const guidance = await input({
     message: "What should the model do instead?",
     default: "Use a safer project-local approach that does not require this approval."

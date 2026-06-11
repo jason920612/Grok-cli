@@ -1,4 +1,5 @@
 import ora from "ora";
+import chalk from "chalk";
 import type { LLMProvider, ModelMessage } from "../api/LLMProvider.js";
 import type { ResponseTool } from "../api/responsesClient.js";
 import type { GrokCodeConfig } from "../config/loadConfig.js";
@@ -96,12 +97,17 @@ export class AgentLoop {
       }
       this.compactTranscript(messages);
 
-      // Labeled (multi-agent) loops skip the live spinner — concurrent workers
-      // would corrupt each other's spinner on a shared TTY; their progress shows
-      // as prefixed event lines instead.
+      // No live spinner when (a) labeled multi-agent — concurrent workers would
+      // corrupt each other's spinner on one TTY — or (b) an interjection channel
+      // exists: the user may type mid-task and ora's line redraw would erase
+      // their echoed keystrokes. Those modes get a plain step line instead.
       // discardStdin:false — the REPL owns stdin (raw mode, interjection); ora's
       // default stdin grab leaves a lingering handle that hangs process exit.
-      const spinner = this.label ? null : ora({ text: `Grok thinking (step ${state.step})`, discardStdin: false }).start();
+      const liveSpinner = !this.label && !this.interjections;
+      const spinner = liveSpinner ? ora({ text: `Grok thinking (step ${state.step})`, discardStdin: false }).start() : null;
+      if (!spinner && !this.label) {
+        this.events.emit({ type: "step", step: state.step, message: chalk.dim(`Grok thinking (step ${state.step})…`) });
+      }
       let response;
       try {
         response = await this.provider.complete({
@@ -113,7 +119,7 @@ export class AgentLoop {
           signal
         });
       } finally {
-        spinner?.stop();
+        if (spinner) spinner.stop();
       }
       this.usage?.record(response.usage);
       state.throwIfAborted();
