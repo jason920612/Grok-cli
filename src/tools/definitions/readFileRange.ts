@@ -18,10 +18,11 @@ export function readFileRangeTool(skills: ToolSkillRegistry) {
       const requested = args.endLine - args.startLine + 1;
       if (requested > 200 && lines.length >= 150) throw new Error("Range too large. Request at most 200 lines, or the whole file only if it is under 150 lines.");
       const rawRegion = lines.slice(args.startLine - 1, args.endLine);
-      const selected = rawRegion.map((line, i) => `${args.startLine + i}: ${line}`);
-      const text = selected.join("\n");
+      // Return raw lines WITHOUT line-number prefixes: apply_patch locates by
+      // content, and prefixes copied into a patch break hunk matching.
+      const text = rawRegion.join("\n");
       // Record read provenance for read-before-write (§6.6/§9.5).
-      ctx.engine?.recordRead(args.path, args.startLine, Math.min(args.endLine, lines.length), rawRegion.join("\n"));
+      ctx.engine?.recordRead(args.path, args.startLine, Math.min(args.endLine, lines.length), text);
       ctx.context.add({
         type: "file_range",
         content: `${args.path}:${args.startLine}-${args.endLine}\n${text}`,

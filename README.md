@@ -2,7 +2,7 @@
 
 `grok-code` is a production-oriented local coding agent CLI inspired by OpenAI Codex CLI and Claude Code. It runs in your terminal, observes and edits only through tools, and uses xAI Grok via the Responses API.
 
-Default model: `grok-4.3`  
+Default model: `grok-build-0.1`  
 API base URL: `https://api.x.ai/v1`
 
 ## Setup
@@ -133,7 +133,7 @@ Both thresholds are configurable in `.grok-code/config.json`.
 The agent uses `client.responses.create(...)` from the `openai` npm package with:
 
 - `baseURL: "https://api.x.ai/v1"`
-- `model: "grok-4.3"` by default
+- `model: "grok-build-0.1"` by default
 - `tools`
 - `tool_choice`
 - `parallel_tool_calls: true`

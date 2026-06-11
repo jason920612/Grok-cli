@@ -67,9 +67,11 @@ export class AgentLoop {
       this.context.nextStep(task);
       await this.maybeSummarize(executor.summaries);
 
+      const relevant = this.context.relevant(task, TUNING.context.relevantDefaultTokens);
       const input = buildStatelessInput({
         task,
         verifiedFacts: executor.summaries.map((s) => `${s.name} ${s.ok ? "succeeded" : "failed"}: ${s.summary}`),
+        observations: buildObservations(relevant),
         priorActions: executor.summaries.map((s) => `step ${s.step}: ${s.name}(${s.args ?? ""}) -> ${s.ok ? "ok" : "failed"}`),
         inferredFacts: buildStatelessInferences(this.context.relevant(task, TUNING.context.statelessInferenceTokens)),
         lastFailure: executor.failureTracker.lastFailure(),
@@ -285,6 +287,32 @@ function buildVerifierMemoryFacts(items: ContextItem[]): EvidenceMemoryFact[] {
       factConfidence: item.factConfidence ?? "uncertain",
       source: item.source
     }));
+}
+
+const OBSERVATION_TYPES = new Set<ContextItem["type"]>([
+  "file_range",
+  "file_overview",
+  "search_result",
+  "shell_output",
+  "test_result",
+  "patch",
+  "repo_summary",
+  "environment_summary",
+  "project_tooling_summary"
+]);
+
+/** Render the actual content of verified observations so the model can act without re-reading. */
+function buildObservations(items: ContextItem[]): string[] {
+  return items
+    .filter((item) => OBSERVATION_TYPES.has(item.type))
+    .map((item) => {
+      const where = item.source?.path
+        ? ` ${item.source.path}${item.source.startLine !== undefined ? `:${item.source.startLine}-${item.source.endLine ?? item.source.startLine}` : ""}`
+        : item.source?.command
+          ? ` (${item.source.command})`
+          : "";
+      return `<${item.type}${where}>\n${item.content}`;
+    });
 }
 
 function buildStatelessInferences(items: ContextItem[]): string[] {

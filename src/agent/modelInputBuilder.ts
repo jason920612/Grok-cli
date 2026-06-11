@@ -15,6 +15,8 @@ export type ModelInputBuildOptions = {
 export type StatelessInputBuildOptions = {
   task: string;
   verifiedFacts: string[];
+  /** Actual content of verified observations (file ranges, search results, command output). */
+  observations?: string[];
   priorActions: string[];
   inferredFacts?: string[];
   lastFailure?: {
@@ -41,6 +43,10 @@ export function buildStatelessInput(options: StatelessInputBuildOptions): string
   const inferredFacts = options.inferredFacts && options.inferredFacts.length > 0
     ? options.inferredFacts.map((o) => `- ${o}`).join("\n")
     : "None recorded.";
+
+  const observations = options.observations && options.observations.length > 0
+    ? options.observations.join("\n\n")
+    : "None yet.";
 
   const failureSection = options.lastFailure
     ? `\n<Last Failure>
@@ -93,6 +99,9 @@ ${options.task}
 <Situation Memory>
 Current user request:
 ${options.task}
+
+Verified observations (file contents, search results, command output you have already seen — do not re-read these):
+${observations}
 
 Verified workspace / runtime observations:
 ${verifiedFacts}

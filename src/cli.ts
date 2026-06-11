@@ -31,9 +31,9 @@ export async function main(): Promise<void> {
   const program = new Command();
   program
     .name("grok-code")
-    .description("Local coding agent CLI powered by xAI Grok 4.3")
+    .description("Local coding agent CLI powered by xAI Grok")
     .argument("[task...]", "Task description")
-    .option("--model <model>", "Model", "grok-4.3")
+    .option("--model <model>", "Model", "grok-build-0.1")
     .option("--approval <mode>", "on-request|auto-local|auto-safe|auto-all|never", "on-request")
     .option("--profile <profile>", "Sandbox profile: default|build|test|debug|package|docs", "default")
     .option("--tool-choice <choice>", "auto|required|none", "auto")

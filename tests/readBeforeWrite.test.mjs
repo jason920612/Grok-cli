@@ -29,15 +29,8 @@ function makeContext(root) {
   };
 }
 
-const modifyPatch = (file) => [
-  `--- a/${file}`,
-  `+++ b/${file}`,
-  "@@ -1,2 +1,2 @@",
-  "-line one",
-  "+LINE ONE",
-  " line two",
-  ""
-].join("\n");
+const modifyPatch = (file) =>
+  ["*** Begin Patch", `*** Update File: ${file}`, "@@", "-line one", "+LINE ONE", " line two", "*** End Patch"].join("\n");
 
 test("modify is rejected until the edited region has been read", async (t) => {
   const root = makeWorkspace();
@@ -69,15 +62,7 @@ test("a write invalidates reads so a second blind edit is blocked", async () => 
   await patch.execute({ patch: modifyPatch("a.ts"), reason: "edit" }, ctx);
 
   // reads invalidated by the write — a second edit without re-reading is blocked
-  const second = [
-    "--- a/a.ts",
-    "+++ b/a.ts",
-    "@@ -1,2 +1,2 @@",
-    "-LINE ONE",
-    "+line ONE",
-    " line two",
-    ""
-  ].join("\n");
+  const second = ["*** Begin Patch", "*** Update File: a.ts", "@@", "-LINE ONE", "+line ONE", " line two", "*** End Patch"].join("\n");
   await assert.rejects(() => patch.execute({ patch: second, reason: "edit again" }, ctx), /have not been read/);
 });
 
@@ -86,7 +71,7 @@ test("delete requires existence evidence but not content reads", async () => {
   fs.writeFileSync(path.join(root, "gone.ts"), "bye\n");
   const ctx = makeContext(root);
   const patch = applyPatchTool(new ToolSkillRegistry(root));
-  const deletePatch = ["--- a/gone.ts", "+++ /dev/null", "@@ -1 +0,0 @@", "-bye", ""].join("\n");
+  const deletePatch = ["*** Begin Patch", "*** Delete File: gone.ts", "*** End Patch"].join("\n");
 
   await assert.rejects(() => patch.execute({ patch: deletePatch, reason: "rm" }, ctx), /without prior evidence it exists/);
 
@@ -116,7 +101,7 @@ test("create needs no prior read", async () => {
   const root = makeWorkspace();
   const ctx = makeContext(root);
   const patch = applyPatchTool(new ToolSkillRegistry(root));
-  const createPatch = ["--- /dev/null", "+++ b/new.ts", "@@ -0,0 +1 @@", "+hi", ""].join("\n");
+  const createPatch = ["*** Begin Patch", "*** Add File: new.ts", "+hi", "*** End Patch"].join("\n");
   const result = await patch.execute({ patch: createPatch, reason: "new" }, ctx);
   assert.deepEqual(result.modifiedFiles, ["new.ts"]);
 });

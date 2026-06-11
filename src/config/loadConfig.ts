@@ -10,7 +10,7 @@ export type SandboxProfile = "default" | "build" | "test" | "debug" | "package" 
 export type ConversationMode = "stateful" | "stateless" | "hybrid";
 
 export const GrokCodeConfigSchema = z.object({
-  model: z.string().default("grok-4.3"),
+  model: z.string().default("grok-build-0.1"),
   approval: z.enum(["on-request", "auto-local", "auto-safe", "auto-all", "never"]).default("on-request"),
   toolChoice: z.enum(["auto", "required", "none"]).default("auto"),
   maxSteps: z.number().int().positive().default(50),

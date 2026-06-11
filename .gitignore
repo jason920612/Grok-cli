@@ -5,5 +5,6 @@ dist/
 .env.*
 !.env.example
 .grok-code/sessions/
+.grok-code/.trash/
 coverage/
 *.log

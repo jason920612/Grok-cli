@@ -58,7 +58,7 @@ export function migrate(raw: any): Session {
     id: String(raw?.id ?? ""),
     startedAt: String(raw?.startedAt ?? new Date(0).toISOString()),
     updatedAt: String(raw?.updatedAt ?? new Date(0).toISOString()),
-    model: String(raw?.model ?? "grok-4.3"),
+    model: String(raw?.model ?? "grok-build-0.1"),
     workspaceRoot: String(raw?.workspaceRoot ?? ""),
     approval: raw?.approval ?? "on-request",
     environmentSummary: raw?.environmentSummary,

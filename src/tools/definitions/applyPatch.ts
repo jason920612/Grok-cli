@@ -1,136 +1,103 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { parsePatch, applyPatch as applyOnePatch } from "diff";
 import { z } from "zod";
 import chalk from "chalk";
 import { schemas } from "../toolSchemas.js";
 import { makeTool } from "./helpers.js";
+import { parseCodexPatch, applyCodexUpdate, codexPatchMetadata, type CodexAction } from "../codexPatch.js";
 import type { ToolSkillRegistry } from "../../tool-skills/ToolSkillRegistry.js";
 import type { PatchApprovalMetadata } from "../../approval/ApprovalPolicy.js";
+
+const DESCRIPTION =
+  "Apply changes to workspace files using the apply_patch envelope (context-located, no line numbers). " +
+  "Wrap in `*** Begin Patch` / `*** End Patch`. Use `*** Add File: <path>` (then +lines), " +
+  "`*** Update File: <path>` (then `@@` hunks of ' ' context / '-' removed / '+' added lines), " +
+  "`*** Delete File: <path>`, and optional `*** Move to: <path>`. " +
+  "You must read the lines you change first (read-before-write).";
 
 export function applyPatchTool(skills: ToolSkillRegistry) {
   return makeTool(
     "apply_patch",
-    "Apply a unified diff patch to files inside the workspace.",
-    schemas.object({ patch: schemas.string("Unified diff patch."), reason: schemas.string("Why this patch is needed.") }, ["patch", "reason"]),
+    DESCRIPTION,
+    schemas.object({ patch: schemas.string("apply_patch envelope."), reason: schemas.string("Why this patch is needed.") }, ["patch", "reason"]),
     z.object({ patch: z.string().min(1), reason: z.string().min(1) }),
     skills,
     async (args, ctx) => {
-      const parsed = parsePatch(args.patch);
-      if (parsed.length === 0) throw new Error("Patch is not a valid unified diff.");
-      const metadata = patchApprovalMetadata(parsed);
-      const approved = await ctx.approval.approvePatch(args.reason, metadata);
+      const parsed = parseCodexPatch(args.patch);
+      if (parsed.actions.length === 0) throw new Error("Patch contains no file actions.");
+      const approved = await ctx.approval.approvePatch(args.reason, patchApprovalMetadata(parsed.actions));
       if (!approved) throw new Error("Patch denied by approval policy.");
+
       const modified: string[] = [];
       const deleted: string[] = [];
-      for (const filePatch of parsed) {
-        const target = cleanPatchPath(filePatch.newFileName && filePatch.newFileName !== "/dev/null" ? filePatch.newFileName : filePatch.oldFileName);
-        if (!target) throw new Error("Patch file path missing.");
-        const operation: "create" | "modify" | "delete" =
-          filePatch.oldFileName === "/dev/null" ? "create" : filePatch.newFileName === "/dev/null" ? "delete" : "modify";
-        const abs = ctx.sandbox.assertWritablePatchPath(target);
-
-        // read-before-write (§9.5): proportional to the operation's failure mode.
-        enforceReadBeforeWrite(ctx, target, operation, filePatch);
-
-        const oldContent = operation === "create" ? "" : await fs.readFile(abs, "utf8").catch(() => "");
-        const next = applyOnePatch(oldContent, filePatch);
-        if (next === false) throw new Error(`Patch failed for ${target}`);
-
-        // snapshot pre-image to the undo net (§9.6) before the destructive write.
+      for (const action of parsed.actions) {
+        const abs = ctx.sandbox.assertWritablePatchPath(action.path);
         const round = ctx.round?.();
-        if (ctx.snapshots && round !== undefined) {
-          ctx.snapshots.snapshot(abs, target, operation === "modify" ? "overwrite" : operation, round);
-        }
 
-        if (operation === "delete") {
-          await fs.unlink(abs);
-          ctx.engine?.invalidateReads(target);
-          deleted.push(target);
+        if (action.type === "add") {
+          if (ctx.snapshots && round !== undefined) ctx.snapshots.snapshot(abs, action.path, "create", round);
+          await fs.mkdir(path.dirname(abs), { recursive: true }).catch(() => undefined);
+          await fs.writeFile(abs, joinFileLines(action.lines), "utf8");
+          ctx.engine?.invalidateReads(action.path);
+          ctx.engine?.recordExistence([action.path]);
+          modified.push(action.path);
           continue;
         }
-        await fs.mkdir(path.dirname(abs), { recursive: true }).catch(() => undefined);
-        await fs.writeFile(abs, next, "utf8");
-        ctx.engine?.invalidateReads(target);
-        modified.push(target);
+
+        if (action.type === "delete") {
+          if (ctx.engine && !ctx.engine.hasFileExistenceEvidence(action.path)) {
+            throw new Error(
+              `Refusing to delete ${action.path} without prior evidence it exists. List or inspect it first (list_files / get_file_overview).`
+            );
+          }
+          if (ctx.snapshots && round !== undefined) ctx.snapshots.snapshot(abs, action.path, "delete", round);
+          await fs.unlink(abs);
+          ctx.engine?.invalidateReads(action.path);
+          deleted.push(action.path);
+          continue;
+        }
+
+        // update
+        const content = await fs.readFile(abs, "utf8").catch(() => {
+          throw new Error(`Cannot update ${action.path}: file not found.`);
+        });
+        const { result, ranges } = applyCodexUpdate(content, action.hunks);
+
+        // read-before-write (§9.5): the modified regions must have been read & fresh.
+        if (ctx.engine && ranges.length > 0) {
+          const uncovered = ctx.engine.uncoveredForWrite(action.path, ranges);
+          if (uncovered.length > 0) {
+            const spans = uncovered.map((r) => `${r.startLine}-${r.endLine}`).join(", ");
+            throw new Error(
+              `Refusing to modify ${action.path}: lines ${spans} have not been read (or were changed since). ` +
+                `Read them with read_file_range before editing.`
+            );
+          }
+        }
+
+        const targetAbs = action.movePath ? ctx.sandbox.assertWritablePatchPath(action.movePath) : abs;
+        if (ctx.snapshots && round !== undefined) ctx.snapshots.snapshot(abs, action.path, "overwrite", round);
+        await fs.mkdir(path.dirname(targetAbs), { recursive: true }).catch(() => undefined);
+        await fs.writeFile(targetAbs, result, "utf8");
+        ctx.engine?.invalidateReads(action.path);
+        if (action.movePath) {
+          await fs.unlink(abs).catch(() => undefined);
+          ctx.engine?.invalidateReads(action.movePath);
+        }
+        modified.push(action.movePath ?? action.path);
       }
-      console.log(chalk.green("Applied patch:"));
-      console.log(colorUnifiedDiff(args.patch));
-      ctx.context.add({
-        type: "patch",
-        content: args.patch,
-        priority: 85,
-        factSource: "patch",
-        factConfidence: "verified",
-        source: { command: args.reason }
-      });
+
+      console.log(chalk.green(`Applied patch: ${[...modified, ...deleted].join(", ")}`));
       return { modifiedFiles: modified, deletedFiles: deleted, reminder: "Run git_diff and the smallest relevant tests/checks before final answer." };
     }
   );
 }
 
-function colorUnifiedDiff(patch: string): string {
-  return patch.split(/\r?\n/).map((line) => {
-    if (line.startsWith("+") && !line.startsWith("+++")) return chalk.green(line);
-    if (line.startsWith("-") && !line.startsWith("---")) return chalk.red(line);
-    if (line.startsWith("@@")) return chalk.cyan(line);
-    if (line.startsWith("diff ") || line.startsWith("index ")) return chalk.dim(line);
-    return line;
-  }).join("\n");
+function joinFileLines(lines: string[]): string {
+  const body = lines.join("\n");
+  return body.endsWith("\n") || body === "" ? body : `${body}\n`;
 }
 
-/**
- * Enforce read-before-write (§9.5). Only active when an engine is wired
- * (the real Agent); proportional to each operation's failure mode:
- * modify needs the edited regions read & fresh; delete needs only existence
- * evidence; create is exempt.
- */
-function enforceReadBeforeWrite(
-  ctx: { engine?: import("../../context/ContextEngine.js").ContextEngine },
-  target: string,
-  operation: "create" | "modify" | "delete",
-  filePatch: ReturnType<typeof parsePatch>[number]
-): void {
-  if (!ctx.engine) return;
-  if (operation === "create") return;
-  if (operation === "delete") {
-    if (!ctx.engine.hasFileExistenceEvidence(target)) {
-      throw new Error(
-        `Refusing to delete ${target} without prior evidence it exists. List or inspect it first (list_files / get_file_overview).`
-      );
-    }
-    return;
-  }
-  const ranges = filePatch.hunks
-    .filter((hunk) => hunk.oldLines > 0)
-    .map((hunk) => ({ startLine: hunk.oldStart, endLine: hunk.oldStart + hunk.oldLines - 1 }));
-  const uncovered = ctx.engine.uncoveredForWrite(target, ranges);
-  if (uncovered.length > 0) {
-    const spans = uncovered.map((r) => `${r.startLine}-${r.endLine}`).join(", ");
-    throw new Error(
-      `Refusing to modify ${target}: lines ${spans} have not been read (or were changed since). ` +
-        `Read them with read_file_range before editing.`
-    );
-  }
-}
-
-function cleanPatchPath(fileName?: string): string | undefined {
-  if (!fileName) return undefined;
-  return fileName.replace(/^a\//, "").replace(/^b\//, "");
-}
-
-function patchApprovalMetadata(parsed: ReturnType<typeof parsePatch>): PatchApprovalMetadata {
-  return {
-    files: parsed.map((filePatch) => {
-      const target = cleanPatchPath(filePatch.newFileName && filePatch.newFileName !== "/dev/null" ? filePatch.newFileName : filePatch.oldFileName) ?? "unknown";
-      const additions = filePatch.hunks.reduce((sum, hunk) => sum + hunk.lines.filter((line) => line.startsWith("+") && !line.startsWith("+++")).length, 0);
-      const deletions = filePatch.hunks.reduce((sum, hunk) => sum + hunk.lines.filter((line) => line.startsWith("-") && !line.startsWith("---")).length, 0);
-      return {
-        path: target,
-        operation: filePatch.oldFileName === "/dev/null" ? "create" : filePatch.newFileName === "/dev/null" ? "delete" : "modify",
-        additions,
-        deletions
-      };
-    })
-  };
+function patchApprovalMetadata(actions: CodexAction[]): PatchApprovalMetadata {
+  return { files: codexPatchMetadata(actions) };
 }

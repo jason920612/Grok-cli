@@ -13,7 +13,7 @@ function tmpDir() {
 test("loadConfig applies defaults and honors overrides", () => {
   const cwd = tmpDir();
   const config = loadConfig(cwd, { maxSteps: 7, enableVerifier: true });
-  assert.equal(config.model, "grok-4.3");
+  assert.equal(config.model, "grok-build-0.1");
   assert.equal(config.approval, "on-request");
   assert.equal(config.maxSteps, 7);
   assert.equal(config.enableVerifier, true);

@@ -19,7 +19,7 @@ Tool rules:
 - Prefer search and file overview before reading code.
 - Prefer read_file_range over full-file reads.
 - Do not read entire large files by default.
-- Use apply_patch for all file modifications.
+- Use apply_patch for all file modifications. It uses a context-located envelope (NOT unified diff, NO line numbers): wrap in "*** Begin Patch" / "*** End Patch"; "*** Add File: <path>" then +lines; "*** Update File: <path>" then "@@" hunks with space-prefixed context, "-" removed, "+" added lines; "*** Delete File: <path>". Read the exact lines you change first. See the apply_patch tool skill for the full format.
 - Use create_skill only for creating or updating project-local skill markdown under .grok-code/skills.
 - Use run_python for foreground commands and scripts (cross-platform). Invoke external programs (git, npm, tsc) via subprocess, e.g. subprocess.run(["git","status"]). Do not write files directly from Python — use apply_patch so edits are read-checked and reversible.
 - Use start_background_command only for long-running commands.

@@ -15,13 +15,7 @@ import { ToolSkillRegistry } from "../dist/tool-skills/ToolSkillRegistry.js";
 test("apply_patch creates files inside new directories", async () => {
   const root = makeWorkspace();
   const tool = applyPatchTool(new ToolSkillRegistry(root));
-  const patch = [
-    "--- /dev/null",
-    "+++ b/new-dir/file.txt",
-    "@@ -0,0 +1 @@",
-    "+hello",
-    ""
-  ].join("\n");
+  const patch = ["*** Begin Patch", "*** Add File: new-dir/file.txt", "+hello", "*** End Patch"].join("\n");
 
   const result = await tool.execute({ patch, reason: "create nested file" }, makeContext(root));
   assert.deepEqual(result.modifiedFiles, ["new-dir/file.txt"]);
@@ -33,13 +27,7 @@ test("apply_patch removes files for delete patches", async () => {
   const target = path.join(root, "delete-me.txt");
   fs.writeFileSync(target, "hello\n");
   const tool = applyPatchTool(new ToolSkillRegistry(root));
-  const patch = [
-    "--- a/delete-me.txt",
-    "+++ /dev/null",
-    "@@ -1 +0,0 @@",
-    "-hello",
-    ""
-  ].join("\n");
+  const patch = ["*** Begin Patch", "*** Delete File: delete-me.txt", "*** End Patch"].join("\n");
 
   const result = await tool.execute({ patch, reason: "delete file" }, makeContext(root));
   assert.deepEqual(result.modifiedFiles, []);
