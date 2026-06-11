@@ -21,13 +21,14 @@ import { WorkspaceTrustStore, describeTrustEntry, type WorkspaceTrustScope } fro
 const APPROVAL_MODES: ApprovalMode[] = ["on-request", "auto-local", "auto-safe", "auto-all", "never"];
 
 /**
- * Web UI backend (web-ui-v1.md).
+ * Web UI backend (web-ui-v1.md) with multi-conversation support.
  *
- * A local HTTP server bound to 127.0.0.1 with a random session token. Events
- * stream to the browser over SSE (with a replay buffer so reloads are
- * lossless); user actions come back as JSON POSTs. Approval prompts and
- * ask_user questions become pending requests the browser answers with buttons.
- * Zero new runtime dependencies: SSE + fetch instead of WebSocket.
+ * Each conversation is a {@link WebSession} with a unique id, its own agent,
+ * event buffer, pending requests, and run state — so the UI can run several
+ * threads, switch between them, and the backend can dump any thread's full live
+ * state for debugging (GET /api/debug?session=<id>). A local HTTP server bound
+ * to 127.0.0.1 with a random token streams each session's events over SSE and
+ * takes actions via JSON POSTs (every endpoint is scoped by ?session=<id>).
  */
 
 export type WebEvent =
@@ -51,6 +52,8 @@ export type WebServerOptions = {
   openBrowser?: boolean;
   /** Pre-baked events for screenshot/demo runs — no live agent calls. */
   demoEvents?: WebEvent[];
+  /** Build a fresh agent for a new conversation on the current workspace. */
+  createAgent?: () => Promise<Agent>;
   /** Build a fresh agent for a different workspace (the /cd command). */
   switchWorkspace?: (workspace: string) => Promise<Agent>;
   /** Build a fresh agent on the same workspace with a different model (the /model command). */
@@ -63,6 +66,15 @@ export type WebServer = {
   close(): Promise<void>;
 };
 
+type SessionDeps = {
+  switchWorkspace?: (workspace: string) => Promise<Agent>;
+  switchModel?: (model: string) => Promise<Agent>;
+  demoMode: boolean;
+  multiAgentDefault: boolean;
+};
+
+type PendingRequest = { resolve: (body: any) => void; kind: "approval" | "ask_user"; summary: string; createdAt: number };
+
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const stripAnsi = (s: string) => s.replace(ANSI_RE, "");
 
@@ -73,262 +85,396 @@ class WebEventSink implements AgentEventSink {
   }
 }
 
-export async function startWebServer(opts: WebServerOptions): Promise<WebServer> {
-  let agent = opts.agent;
-  const token = randomUUID().replace(/-/g, "");
-  let seq = 0;
-  const buffer: Array<{ seq: number; ev: WebEvent }> = (opts.demoEvents ?? []).map((ev) => ({ seq: ++seq, ev }));
-  const clients = new Set<http.ServerResponse>();
-  const pending = new Map<string, (body: any) => void>();
+/** One conversation thread: its own agent, event buffer, pending requests, run state. */
+class WebSession {
+  title = "New conversation";
+  private seq = 0;
+  readonly buffer: Array<{ seq: number; ev: WebEvent }> = [];
+  readonly clients = new Set<http.ServerResponse>();
+  readonly pending = new Map<string, PendingRequest>();
+  running = false;
+  private controller: AbortController | null = null;
+  private interjections: Interjections | null = null;
+  useAgents: boolean;
+  private modeBeforeAuto: ApprovalMode;
+  readonly createdAt = Date.now();
+  lastActivityAt = Date.now();
+  messageCount = 0;
 
-  let running = false;
-  let controller: AbortController | null = null;
-  let interjections: Interjections | null = null;
-  let useAgents = opts.multiAgentDefault ?? true;
-  let modeBeforeAuto: ApprovalMode = agent.approval.mode === "auto-all" ? "on-request" : agent.approval.mode;
+  constructor(readonly id: string, public agent: Agent, private readonly deps: SessionDeps, demoEvents?: WebEvent[]) {
+    this.useAgents = deps.multiAgentDefault;
+    this.modeBeforeAuto = agent.approval.mode === "auto-all" ? "on-request" : agent.approval.mode;
+    for (const ev of demoEvents ?? []) this.buffer.push({ seq: ++this.seq, ev });
+    this.wire();
+  }
 
-  const frame = (item: { seq: number; ev: WebEvent }) => `id: ${item.seq}\ndata: ${JSON.stringify(item.ev)}\n\n`;
-  const emit = (ev: WebEvent): void => {
-    const item = { seq: ++seq, ev };
-    buffer.push(item);
-    if (buffer.length > 2000) buffer.splice(0, buffer.length - 2000);
-    const data = frame(item);
-    // Write to each client independently: a stale/half-closed SSE connection must
-    // not throw and starve the live ones. Prune any client whose write fails.
-    for (const res of [...clients]) {
+  private wire(): void {
+    this.agent.askUser = (questions) => this.webAskUser(questions);
+    this.agent.approval.prompter = (command, reason, risk, details) => this.webPrompter(command, reason, risk, details);
+  }
+
+  /** Replace this session's agent (workspace/model/trust rebuild) and re-wire hooks. */
+  setAgent(agent: Agent): void {
+    this.agent = agent;
+    this.wire();
+  }
+
+  private frame(item: { seq: number; ev: WebEvent }): string {
+    return `id: ${item.seq}\ndata: ${JSON.stringify(item.ev)}\n\n`;
+  }
+
+  emit(ev: WebEvent): void {
+    const item = { seq: ++this.seq, ev };
+    this.buffer.push(item);
+    if (this.buffer.length > 4000) this.buffer.splice(0, this.buffer.length - 4000);
+    const data = this.frame(item);
+    for (const res of [...this.clients]) {
       try {
         if (!res.writableEnded) res.write(data);
-        else clients.delete(res);
+        else this.clients.delete(res);
       } catch {
-        clients.delete(res);
+        this.clients.delete(res);
       }
     }
-  };
+  }
 
-  const webPrompter: ApprovalPrompter = (command, reason, risk, details) =>
+  /** Attach an SSE client, replaying events it has not seen (Last-Event-ID). */
+  attach(res: http.ServerResponse, lastId: number): void {
+    for (const item of this.buffer) if (item.seq > lastId) res.write(this.frame(item));
+    this.clients.add(res);
+  }
+
+  closeClients(): void {
+    for (const res of this.clients) {
+      try {
+        res.destroy();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.clients.clear();
+  }
+
+  interrupt(): void {
+    this.controller?.abort();
+  }
+
+  private webPrompter: ApprovalPrompter = (command, reason, risk, details) =>
     new Promise((resolve) => {
       const id = randomUUID().slice(0, 8);
-      pending.set(id, (body) => {
-        resolve({
-          approved: Boolean(body?.approved),
-          rememberSimilar: Boolean(body?.rememberSimilar),
-          ...(body?.approved ? {} : { guidance: typeof body?.guidance === "string" && body.guidance ? body.guidance : "User denied the request from the web UI." })
-        } as any);
+      this.pending.set(id, {
+        kind: "approval",
+        summary: `${details.operation ?? "operation"}: ${command}`,
+        createdAt: Date.now(),
+        resolve: (body) =>
+          resolve({
+            approved: Boolean(body?.approved),
+            rememberSimilar: Boolean(body?.rememberSimilar),
+            ...(body?.approved ? {} : { guidance: typeof body?.guidance === "string" && body.guidance ? body.guidance : "User denied the request from the web UI." })
+          } as any)
       });
-      emit({ type: "request", id, kind: "approval", payload: { command, reason, risk, ...details } });
+      this.emit({ type: "request", id, kind: "approval", payload: { command, reason, risk, ...details } });
     });
 
-  const webAskUser: NonNullable<Agent["askUser"]> = (questions) =>
+  private webAskUser: NonNullable<Agent["askUser"]> = (questions) =>
     new Promise((resolve) => {
       const id = randomUUID().slice(0, 8);
-      pending.set(id, (body) => {
-        const answers = Array.isArray(body?.answers) ? body.answers : [];
-        resolve(questions.map((q, i) => ({ question: q.question, answer: String(answers[i]?.answer ?? answers[i] ?? "") })));
+      this.pending.set(id, {
+        kind: "ask_user",
+        summary: questions.map((q) => q.question).join(" | ").slice(0, 120),
+        createdAt: Date.now(),
+        resolve: (body) => {
+          const answers = Array.isArray(body?.answers) ? body.answers : [];
+          resolve(questions.map((q, i) => ({ question: q.question, answer: String(answers[i]?.answer ?? answers[i] ?? "") })));
+        }
       });
-      emit({ type: "request", id, kind: "ask_user", payload: { questions } });
+      this.emit({ type: "request", id, kind: "ask_user", payload: { questions } });
     });
 
-  const wire = (a: Agent): void => {
-    a.askUser = webAskUser;
-    a.approval.prompter = webPrompter;
-  };
-  wire(agent);
+  resolvePending(id: string, body: any): boolean {
+    const entry = this.pending.get(id);
+    if (!entry) return false;
+    this.pending.delete(id);
+    entry.resolve(body);
+    this.emit({ type: "request_resolved", id });
+    return true;
+  }
 
-  const stateEvent = (): WebEvent => ({
-    type: "state",
-    model: agent.config.model,
-    workspace: agent.config.workspaceRoot,
-    approval: agent.approval.mode,
-    agents: useAgents,
-    yes: agent.approval.mode === "auto-all"
-  });
+  stateEvent(): WebEvent {
+    return {
+      type: "state",
+      model: this.agent.config.model,
+      workspace: this.agent.config.workspaceRoot,
+      approval: this.agent.approval.mode,
+      agents: this.useAgents,
+      yes: this.agent.approval.mode === "auto-all"
+    };
+  }
 
-  const out = (title: string, text: string): void => emit({ type: "output", title, text });
+  private out(title: string, text: string): void {
+    this.emit({ type: "output", title, text });
+  }
 
-  const diffFingerprint = (f: FileDiff) => `${f.status}:${f.additions}:${f.deletions}`;
+  setToggles(body: any): void {
+    if (typeof body?.agents === "boolean") this.useAgents = body.agents;
+    if (typeof body?.yes === "boolean") {
+      if (body.yes && this.agent.approval.mode !== "auto-all") this.modeBeforeAuto = this.agent.approval.mode;
+      this.agent.approval.setMode(body.yes ? "auto-all" : this.modeBeforeAuto);
+      this.agent.config.approval = this.agent.approval.mode;
+    }
+    this.emit(this.stateEvent());
+  }
 
-  const runTask = async (text: string): Promise<void> => {
-    if (opts.demoEvents) return; // demo mode: display only
-    if (running) {
-      if (pending.size > 0) {
-        // The agent is blocked waiting on a question/approval; an interjection
-        // won't be read until that's answered. Tell the user to use the card.
-        emit({ type: "chat", role: "system", text: "⚠ The agent is waiting for your answer above — please use the buttons in the highlighted card first." });
+  processInput(text: string): void {
+    this.lastActivityAt = Date.now();
+    if (text.startsWith("/")) void this.handleCommand(text);
+    else void this.runTask(text);
+  }
+
+  private async runTask(text: string): Promise<void> {
+    if (this.deps.demoMode) return;
+    if (this.running) {
+      if (this.pending.size > 0) {
+        this.emit({ type: "chat", role: "system", text: "⚠ The agent is waiting for your answer above — please use the buttons in the highlighted card first." });
       } else {
-        interjections?.push(text);
-        emit({ type: "chat", role: "system", text: `💬 queued for the agent: ${text}` });
+        this.interjections?.push(text);
+        this.emit({ type: "chat", role: "system", text: `💬 queued for the agent: ${text}` });
       }
       return;
     }
-    running = true;
-    controller = new AbortController();
-    interjections = new Interjections();
-    emit({ type: "chat", role: "user", text });
-    emit({ type: "task", status: "running" });
-    const baseline = new Map(collectWorkingTreeDiff(agent.config.workspaceRoot).map((f) => [f.path, diffFingerprint(f)]));
+    this.running = true;
+    this.controller = new AbortController();
+    this.interjections = new Interjections();
+    this.messageCount++;
+    if (this.title === "New conversation") this.title = text.slice(0, 60);
+    this.emit({ type: "chat", role: "user", text });
+    this.emit({ type: "task", status: "running" });
+    const fp = (f: FileDiff) => `${f.status}:${f.additions}:${f.deletions}`;
+    const baseline = new Map(collectWorkingTreeDiff(this.agent.config.workspaceRoot).map((f) => [f.path, fp(f)]));
     try {
       let response: string;
-      if (useAgents) {
-        const orchestrator = new Orchestrator(agent.provider, agent.config, randomUUID().slice(0, 8), text, {
+      if (this.useAgents) {
+        const orchestrator = new Orchestrator(this.agent.provider, this.agent.config, randomUUID().slice(0, 8), text, {
           applyToWorkingTree: true,
-          usage: agent.usage,
-          interjections,
-          askUser: webAskUser,
-          approvalPrompter: webPrompter,
-          eventSinkFactory: (label, isWorker) => new WebEventSink(isWorker ? `worker:${label}` : label, emit)
+          usage: this.agent.usage,
+          interjections: this.interjections,
+          askUser: this.webAskUser,
+          approvalPrompter: this.webPrompter,
+          eventSinkFactory: (label, isWorker) => new WebEventSink(isWorker ? `worker:${label}` : label, (ev) => this.emit(ev))
         });
-        const result = await orchestrator.run(text, controller.signal);
+        const result = await orchestrator.run(text, this.controller.signal);
         response = result.report;
       } else {
-        response = await agent.run(text, false, controller.signal, interjections, new WebEventSink("grok", emit));
+        response = await this.agent.run(text, false, this.controller.signal, this.interjections, new WebEventSink("grok", (ev) => this.emit(ev)));
       }
-      emit({ type: "chat", role: "assistant", text: stripAnsi(response) });
-      const changed = collectWorkingTreeDiff(agent.config.workspaceRoot).filter((f) => baseline.get(f.path) !== diffFingerprint(f));
+      this.emit({ type: "chat", role: "assistant", text: stripAnsi(response) });
+      const changed = collectWorkingTreeDiff(this.agent.config.workspaceRoot).filter((f) => baseline.get(f.path) !== fp(f));
       if (changed.length > 0) {
-        emit({ type: "changes", files: changed.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, body: f.body })) });
+        this.emit({ type: "changes", files: changed.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, body: f.body })) });
       }
-      const lap = agent.usage.lap();
-      if (lap.calls > 0) emit({ type: "usage", line: formatLap(lap) });
-      emit({ type: "task", status: "done" });
+      const lap = this.agent.usage.lap();
+      if (lap.calls > 0) this.emit({ type: "usage", line: formatLap(lap) });
+      this.emit({ type: "task", status: "done" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (/interrupt|abort/i.test(message)) emit({ type: "task", status: "interrupted" });
-      else emit({ type: "task", status: "error", message: stripAnsi(message) });
+      if (/interrupt|abort/i.test(message)) this.emit({ type: "task", status: "interrupted" });
+      else this.emit({ type: "task", status: "error", message: stripAnsi(message) });
     } finally {
-      running = false;
-      controller = null;
-      interjections = null;
-      // Any unanswered prompts belong to the finished task; deny them so nothing dangles.
-      for (const [id, resolve] of pending) {
-        resolve({ approved: false, answers: [] });
-        emit({ type: "request_resolved", id });
-      }
-      pending.clear();
+      this.running = false;
+      this.controller = null;
+      this.interjections = null;
+      for (const id of [...this.pending.keys()]) this.resolvePending(id, { approved: false, answers: [] });
     }
-  };
+  }
 
-  // Slash commands → GUI/web equivalents of the old TUI commands.
-  const handleCommand = async (raw: string): Promise<void> => {
+  private async handleCommand(raw: string): Promise<void> {
     const [name, ...rest] = raw.trim().split(/\s+/);
     const arg = rest.join(" ");
-    const ctx = () => agent.toolContext();
-    emit({ type: "chat", role: "user", text: raw });
+    const ctx = () => this.agent.toolContext();
+    this.emit({ type: "chat", role: "user", text: raw });
     switch (name) {
       case "/help":
-        out("Commands", visibleSlashCommands().map((c) => `${c.usage.padEnd(22)} ${c.description}`).join("\n"));
+        this.out("Commands", visibleSlashCommands().map((c) => `${c.usage.padEnd(22)} ${c.description}`).join("\n"));
         break;
       case "/status":
-        out("Status", [
-          formatSessionStatus(agent.config),
-          stripAnsi(formatWorkspaceTrustStatus(agent.config.workspaceRoot)),
-          agent.usage.hasData ? agent.usage.format() : "tokens this session: none yet"
+        this.out("Status", [
+          formatSessionStatus(this.agent.config),
+          stripAnsi(formatWorkspaceTrustStatus(this.agent.config.workspaceRoot)),
+          this.agent.usage.hasData ? this.agent.usage.format() : "tokens this session: none yet"
         ].join("\n"));
         break;
       case "/cd":
       case "/workspace":
       case "/change-dir": {
-        if (!opts.switchWorkspace) { out("Workspace", "Workspace switching is unavailable in this session."); break; }
-        if (!arg) { out("Workspace", "Usage: /cd <path>  (or use the workspace button in the header)"); break; }
+        if (!this.deps.switchWorkspace) { this.out("Workspace", "Workspace switching is unavailable in this session."); break; }
+        if (!arg) { this.out("Workspace", "Usage: /cd <path>  (or use the workspace button in the header)"); break; }
         try {
-          await agent.background.stopAll("workspace switch cleanup");
-          agent = await opts.switchWorkspace(arg);
-          wire(agent);
-          out("Workspace", `Switched to ${agent.config.workspaceRoot}`);
-          emit(stateEvent());
+          await this.agent.background.stopAll("workspace switch cleanup");
+          this.agent = await this.deps.switchWorkspace(arg);
+          this.wire();
+          this.out("Workspace", `Switched to ${this.agent.config.workspaceRoot}`);
+          this.emit(this.stateEvent());
         } catch (e) {
-          out("Workspace", `Could not switch: ${e instanceof Error ? e.message : String(e)}`);
+          this.out("Workspace", `Could not switch: ${e instanceof Error ? e.message : String(e)}`);
         }
         break;
       }
-      case "/approval": {
+      case "/approval":
         if (arg && APPROVAL_MODES.includes(arg as ApprovalMode)) {
-          agent.approval.setMode(arg as ApprovalMode);
-          agent.config.approval = agent.approval.mode;
-          out("Approval", `Approval mode set to ${arg}.`);
-          emit(stateEvent());
-          emit({ type: "mode", agents: useAgents, yes: agent.approval.mode === "auto-all" });
+          this.agent.approval.setMode(arg as ApprovalMode);
+          this.agent.config.approval = this.agent.approval.mode;
+          this.out("Approval", `Approval mode set to ${arg}.`);
+          this.emit(this.stateEvent());
         } else {
-          out("Approval", `Current: ${agent.approval.mode}\nModes: ${APPROVAL_MODES.join(", ")}\nUsage: /approval <mode>  (or use the header dropdown)`);
+          this.out("Approval", `Current: ${this.agent.approval.mode}\nModes: ${APPROVAL_MODES.join(", ")}\nUsage: /approval <mode>  (or use the header dropdown)`);
         }
         break;
-      }
       case "/trust": {
         const store = new WorkspaceTrustStore();
-        const entry = store.getTrustFor(agent.config.workspaceRoot);
-        emit({ type: "trust", workspace: agent.config.workspaceRoot, current: entry ? describeTrustEntry(entry) : "Not trusted" });
+        const entry = store.getTrustFor(this.agent.config.workspaceRoot);
+        this.emit({ type: "trust", workspace: this.agent.config.workspaceRoot, current: entry ? describeTrustEntry(entry) : "Not trusted" });
         break;
       }
       case "/git-status":
-        out("git status", asText(await agent.tools.execute("git_status", {}, ctx())));
+        this.out("git status", asText(await this.agent.tools.execute("git_status", {}, ctx())));
         break;
       case "/diff": {
-        const files = collectWorkingTreeDiff(agent.config.workspaceRoot);
-        if (files.length === 0) out("Diff", "No changes in the working tree.");
-        else emit({ type: "changes", files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, body: f.body })) });
+        const files = collectWorkingTreeDiff(this.agent.config.workspaceRoot);
+        if (files.length === 0) this.out("Diff", "No changes in the working tree.");
+        else this.emit({ type: "changes", files: files.map((f) => ({ path: f.path, status: f.status, additions: f.additions, deletions: f.deletions, body: f.body })) });
         break;
       }
       case "/context":
-        out("Context", formatContext(agent.context.list()) || "(empty)");
+        this.out("Context", formatContext(this.agent.context.list()) || "(empty)");
         break;
       case "/compact":
       case "/clear":
-        agent.context.compactContext("web session");
-        out("Context", "Context compacted — stale items summarized, pinned items kept.");
+        this.agent.context.compactContext("web session");
+        this.out("Context", "Context compacted — stale items summarized, pinned items kept.");
         break;
       case "/skills":
-        out("Skills", formatSkillsList());
+        this.out("Skills", this.formatSkillsList());
         break;
       case "/tools":
-        out("Tools", agent.toolSkills.toolIndex());
+        this.out("Tools", this.agent.toolSkills.toolIndex());
         break;
       case "/env":
-        out("Environment", asText(await agent.tools.execute("inspect_environment", { includeVersions: true }, ctx())));
+        this.out("Environment", asText(await this.agent.tools.execute("inspect_environment", { includeVersions: true }, ctx())));
         break;
       case "/bg":
-        out("Background commands", asText(agent.background.list()));
+        this.out("Background commands", asText(this.agent.background.list()));
         break;
       case "/bg-stop":
-        out("Background", asText(await agent.tools.execute("stop_background_command", { id: rest[0], reason: "web command" }, ctx())));
+        this.out("Background", asText(await this.agent.tools.execute("stop_background_command", { id: rest[0], reason: "web command" }, ctx())));
         break;
       case "/bg-stop-all":
-        out("Background", asText(await agent.tools.execute("stop_all_background_commands", { reason: "web command" }, ctx())));
+        this.out("Background", asText(await this.agent.tools.execute("stop_all_background_commands", { reason: "web command" }, ctx())));
         break;
       case "/drop":
-        out("Context", agent.context.drop(rest[0] ?? "") ? "dropped" : "not dropped");
+        this.out("Context", this.agent.context.drop(rest[0] ?? "") ? "dropped" : "not dropped");
         break;
       case "/learn-project":
-        void runTask(PROJECT_UNDERSTANDING_TASK);
+        void this.runTask(PROJECT_UNDERSTANDING_TASK);
         break;
-      case "/model": {
-        if (!opts.switchModel) { out("Model", `Current: ${agent.config.model}\nModel switching is unavailable in this session.`); break; }
-        if (!arg) { out("Model", `Current: ${agent.config.model}\nUsage: /model <name>  (or click the model name in the header)`); break; }
+      case "/model":
+        if (!this.deps.switchModel) { this.out("Model", `Current: ${this.agent.config.model}\nModel switching is unavailable in this session.`); break; }
+        if (!arg) { this.out("Model", `Current: ${this.agent.config.model}\nUsage: /model <name>  (or click the model name in the header)`); break; }
         try {
-          await agent.background.stopAll("model switch cleanup");
-          agent = await opts.switchModel(arg);
-          wire(agent);
-          out("Model", `Model switched to ${agent.config.model}.`);
-          emit(stateEvent());
+          await this.agent.background.stopAll("model switch cleanup");
+          this.agent = await this.deps.switchModel(arg);
+          this.wire();
+          this.out("Model", `Model switched to ${this.agent.config.model}.`);
+          this.emit(this.stateEvent());
         } catch (e) {
-          out("Model", `Could not switch model: ${e instanceof Error ? e.message : String(e)}`);
+          this.out("Model", `Could not switch model: ${e instanceof Error ? e.message : String(e)}`);
         }
         break;
-      }
       default:
-        out("Unknown command", `${name} — type /help for the list.`);
+        this.out("Unknown command", `${name} — type /help for the list.`);
     }
-  };
+  }
 
-  const formatSkillsList = (): string => {
-    const active = agent.skillLoader.select("web session");
+  private formatSkillsList(): string {
+    const active = this.agent.skillLoader.select("web session");
     const ids = new Set(active.map((s) => s.id));
-    const available = agent.skillLoader.loadAll().filter((s) => !ids.has(s.id));
+    const available = this.agent.skillLoader.loadAll().filter((s) => !ids.has(s.id));
     const fmt = (xs: typeof active) => xs.map((s) => `- ${s.id}: ${s.description}`).join("\n") || "- none";
     return `Loaded now:\n${fmt(active)}\n\nAvailable when triggered:\n${fmt(available)}`;
+  }
+
+  /** Compact summary for the session list. */
+  summary() {
+    return {
+      id: this.id,
+      title: this.title,
+      running: this.running,
+      messageCount: this.messageCount,
+      createdAt: this.createdAt,
+      lastActivityAt: this.lastActivityAt,
+      model: this.agent.config.model,
+      workspace: this.agent.config.workspaceRoot
+    };
+  }
+
+  /** Per-session fields for /api/state. */
+  state() {
+    return {
+      sessionId: this.id,
+      title: this.title,
+      model: this.agent.config.model,
+      workspace: this.agent.config.workspaceRoot,
+      agents: this.useAgents,
+      yes: this.agent.approval.mode === "auto-all",
+      approval: this.agent.approval.mode,
+      running: this.running,
+      usage: this.agent.usage.hasData ? this.agent.usage.format() : ""
+    };
+  }
+
+  /** Full live state for debugging (GET /api/debug?session=id). */
+  debugState() {
+    return {
+      ...this.summary(),
+      useAgents: this.useAgents,
+      approval: this.agent.approval.mode,
+      workspaceTrusted: this.agent.config.workspaceTrusted,
+      usage: this.agent.usage.hasData ? this.agent.usage.format() : null,
+      clientCount: this.clients.size,
+      eventCount: this.buffer.length,
+      lastSeq: this.seq,
+      pendingRequests: [...this.pending.entries()].map(([id, p]) => ({ id, kind: p.kind, summary: p.summary, ageMs: Date.now() - p.createdAt })),
+      contextItems: this.agent.context.list().length,
+      recentEvents: this.buffer.slice(-40).map((i) => ({ seq: i.seq, ...i.ev }))
+    };
+  }
+}
+
+export async function startWebServer(opts: WebServerOptions): Promise<WebServer> {
+  const token = randomUUID().replace(/-/g, "");
+  const deps: SessionDeps = {
+    switchWorkspace: opts.switchWorkspace,
+    switchModel: opts.switchModel,
+    demoMode: Boolean(opts.demoEvents),
+    multiAgentDefault: opts.multiAgentDefault ?? true
   };
 
-  const processInput = (text: string): void => {
-    if (text.startsWith("/")) void handleCommand(text);
-    else void runTask(text);
+  const sessions = new Map<string, WebSession>();
+  let counter = 0;
+  const newId = () => `c${++counter}-${randomUUID().slice(0, 4)}`;
+  const addSession = (agent: Agent, demoEvents?: WebEvent[]): WebSession => {
+    const session = new WebSession(newId(), agent, deps, demoEvents);
+    sessions.set(session.id, session);
+    return session;
+  };
+  const firstSession = addSession(opts.agent, opts.demoEvents);
+  let activeId = firstSession.id;
+
+  const resolveSession = (url: URL): WebSession =>
+    sessions.get(url.searchParams.get("session") ?? "") ?? sessions.get(activeId) ?? firstSession;
+
+  const sendJson = (res: http.ServerResponse, body: unknown, status = 200): void => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(body));
   };
 
   const htmlPath = resolvePublicFile("index.html");
@@ -348,107 +494,117 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/sessions") {
+      sendJson(res, { sessions: [...sessions.values()].map((s) => s.summary()), activeId });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/debug") {
+      const id = url.searchParams.get("session");
+      if (id) {
+        const session = sessions.get(id);
+        if (!session) return sendJson(res, { error: "unknown session" }, 404);
+        return sendJson(res, session.debugState());
+      }
+      sendJson(res, { activeId, sessions: [...sessions.values()].map((s) => s.debugState()) });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/events") {
+      const session = resolveSession(url);
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
-      // On reconnect the browser sends Last-Event-ID; replay only what it missed
-      // (lossless) instead of the whole buffer (which would duplicate the convo).
       const lastId = Number(url.searchParams.get("lastEventId") ?? req.headers["last-event-id"] ?? 0) || 0;
-      for (const item of buffer) if (item.seq > lastId) res.write(frame(item));
-      clients.add(res);
+      session.attach(res, lastId);
       const heartbeat = setInterval(() => {
         try { res.write(":hb\n\n"); } catch { /* pruned on next emit */ }
       }, 25_000);
-      heartbeat.unref?.(); // never let the keep-alive heartbeat hold the process open
+      heartbeat.unref?.();
       req.on("close", () => {
         clearInterval(heartbeat);
-        clients.delete(res);
+        session.clients.delete(res);
       });
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/state") {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          model: agent.config.model,
-          workspace: agent.config.workspaceRoot,
-          agents: useAgents,
-          yes: agent.approval.mode === "auto-all",
-          approval: agent.approval.mode,
-          approvalModes: APPROVAL_MODES,
-          canSwitchWorkspace: Boolean(opts.switchWorkspace),
-          canSwitchModel: Boolean(opts.switchModel),
-          commands: visibleSlashCommands().map((c) => ({ name: c.name, usage: c.usage, description: c.description })),
-          running,
-          usage: agent.usage.hasData ? agent.usage.format() : ""
-        })
-      );
+      const session = resolveSession(url);
+      sendJson(res, {
+        ...session.state(),
+        approvalModes: APPROVAL_MODES,
+        canSwitchWorkspace: Boolean(opts.switchWorkspace),
+        canSwitchModel: Boolean(opts.switchModel),
+        canCreateSession: Boolean(opts.createAgent),
+        commands: visibleSlashCommands().map((c) => ({ name: c.name, usage: c.usage, description: c.description })),
+        sessions: [...sessions.values()].map((s) => s.summary()),
+        activeId
+      });
       return;
     }
 
     if (req.method === "POST") {
       const body = await readJson(req);
+
+      if (url.pathname === "/api/sessions") {
+        if (!opts.createAgent) return sendJson(res, { error: "Creating conversations is unavailable in this session." }, 400);
+        const agent = await opts.createAgent();
+        const session = addSession(agent);
+        activeId = session.id;
+        return sendJson(res, { id: session.id, summary: session.summary() });
+      }
+      if (url.pathname === "/api/sessions/activate") {
+        const id = String(body?.id ?? "");
+        if (sessions.has(id)) activeId = id;
+        return sendJson(res, { ok: sessions.has(id), activeId });
+      }
+      if (url.pathname === "/api/sessions/close") {
+        const id = String(body?.id ?? "");
+        const session = sessions.get(id);
+        if (session && sessions.size > 1) {
+          session.interrupt();
+          session.closeClients();
+          sessions.delete(id);
+          if (activeId === id) activeId = [...sessions.keys()][0];
+        }
+        return sendJson(res, { ok: Boolean(session), activeId, sessions: [...sessions.values()].map((s) => s.summary()) });
+      }
+
+      const session = resolveSession(url);
       if (url.pathname === "/api/message") {
         const text = String(body?.text ?? "").trim();
-        if (text) processInput(text);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true, queued: running }));
-        return;
+        if (text) session.processInput(text);
+        return sendJson(res, { ok: true, running: session.running });
       }
       if (url.pathname === "/api/interrupt") {
-        controller?.abort();
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true }));
-        return;
+        session.interrupt();
+        return sendJson(res, { ok: true });
+      }
+      if (url.pathname === "/api/respond") {
+        const ok = session.resolvePending(String(body?.id ?? ""), body);
+        return sendJson(res, { ok });
+      }
+      if (url.pathname === "/api/toggle") {
+        session.setToggles(body);
+        return sendJson(res, { ok: true });
       }
       if (url.pathname === "/api/trust") {
         const action = String(body?.action ?? "");
         const store = new WorkspaceTrustStore();
-        const ws2 = agent.config.workspaceRoot;
+        const ws2 = session.agent.config.workspaceRoot;
         if (action === "clear") store.clearTrust(ws2);
         else if (action === "exact" || action === "descendants") store.setTrust(ws2, action as WorkspaceTrustScope);
-        // Rebuild the agent so the sandbox re-reads the new trust state.
         if (opts.switchWorkspace) {
           try {
-            agent = await opts.switchWorkspace(ws2);
-            wire(agent);
+            session.setAgent(await opts.switchWorkspace(ws2));
           } catch {
             /* keep current agent if rebuild fails */
           }
         } else {
-          agent.config.workspaceTrusted = Boolean(store.getTrustFor(ws2));
+          session.agent.config.workspaceTrusted = Boolean(store.getTrustFor(ws2));
         }
         const entry = store.getTrustFor(ws2);
-        out("Workspace trust", entry ? `Updated: ${describeTrustEntry(entry)}` : "Trust cleared.");
-        emit(stateEvent());
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true }));
-        return;
-      }
-      if (url.pathname === "/api/respond") {
-        const id = String(body?.id ?? "");
-        const resolve = pending.get(id);
-        if (resolve) {
-          pending.delete(id);
-          resolve(body);
-          emit({ type: "request_resolved", id });
-        }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: Boolean(resolve) }));
-        return;
-      }
-      if (url.pathname === "/api/toggle") {
-        if (typeof body?.agents === "boolean") useAgents = body.agents;
-        if (typeof body?.yes === "boolean") {
-          if (body.yes && agent.approval.mode !== "auto-all") modeBeforeAuto = agent.approval.mode;
-          agent.approval.setMode(body.yes ? "auto-all" : modeBeforeAuto);
-          agent.config.approval = agent.approval.mode;
-        }
-        // Full state event so the approval dropdown AND the toggles stay in sync.
-        emit(stateEvent());
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ ok: true }));
-        return;
+        session.emit({ type: "output", title: "Workspace trust", text: entry ? `Updated: ${describeTrustEntry(entry)}` : "Trust cleared." });
+        session.emit(session.stateEvent());
+        return sendJson(res, { ok: true });
       }
     }
 
@@ -456,8 +612,6 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
     res.end("Not found");
   });
 
-  // Track raw sockets so close() can forcibly tear down lingering keep-alive
-  // SSE connections (closeAllConnections alone proved unreliable here).
   const sockets = new Set<import("node:net").Socket>();
   server.on("connection", (socket) => {
     sockets.add(socket);
@@ -476,16 +630,7 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
     port,
     close: () =>
       new Promise<void>((resolve) => {
-        // Destroy the SSE sockets outright so close() doesn't wait on lingering
-        // keep-alive connections (otherwise it stalls until the next heartbeat).
-        for (const res of clients) {
-          try {
-            res.destroy();
-          } catch {
-            /* ignore */
-          }
-        }
-        clients.clear();
+        for (const session of sessions.values()) session.closeClients();
         for (const socket of sockets) {
           try {
             socket.destroy();
@@ -515,8 +660,6 @@ function formatLap(lap: { inputTokens: number; outputTokens: number; cachedInput
 }
 
 function resolvePublicFile(name: string): string {
-  // dist/web/server.js → ../../src/web/public (src assets ship in the npm package,
-  // same pattern as src/skills/builtin).
   const here = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [path.join(here, "public", name), path.join(here, "..", "..", "src", "web", "public", name)];
   for (const candidate of candidates) {

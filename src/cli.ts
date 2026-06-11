@@ -238,6 +238,7 @@ async function runInteractiveWeb(opts: CliOpts): Promise<void> {
     agent,
     multiAgentDefault: opts.agents !== false && isGitAvailable(),
     openBrowser: opts.open !== false,
+    createAgent: async () => makeAgent(opts, "interactive session"),
     switchWorkspace: async (workspace) => {
       const next = await makeAgent(opts, "interactive session", path.resolve(workspace));
       process.chdir(next.config.workspaceRoot);

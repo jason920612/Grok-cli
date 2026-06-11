@@ -119,13 +119,16 @@
 <body>
 <header>
   <span class="brand">grok-code</span>
-  <span class="meta" id="model">connecting…</span>
+  <select id="sessions" class="sel" title="Conversation threads"></select>
+  <span class="toggle" id="newchat" title="New conversation">＋</span>
+  <span class="meta" id="model" title="Click to switch model">connecting…</span>
   <span class="ws" id="ws" title="Click to change workspace"></span>
   <span class="spacer"></span>
   <span id="usage"></span>
   <select id="approval" class="sel" title="Approval mode"></select>
   <span class="toggle agents" id="t-agents" title="Multi-agent mode">⚡ multi-agent</span>
   <span class="toggle yes" id="t-yes" title="Always approve (destructive still blocked)">✓ auto-approve</span>
+  <span class="toggle" id="debug" title="Open this thread's live debug state">🐞</span>
   <span class="toggle" id="cmds" title="Commands">☰</span>
   <div id="menu" class="menu"></div>
 </header>
@@ -141,7 +144,9 @@
 </footer>
 <script>
 const token = new URLSearchParams(location.search).get("t") || "";
-const q = (p, b) => fetch(p + "?t=" + token, b && { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
+let SESSION = "";
+const sessParam = () => (SESSION ? "&session=" + encodeURIComponent(SESSION) : "");
+const q = (p, b) => fetch(p + "?t=" + token + sessParam(), b && { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
 const chat = document.getElementById("chat");
 const acts = document.getElementById("acts");
 const input = document.getElementById("input");
@@ -154,6 +159,9 @@ const tYes = document.getElementById("t-yes");
 const elCmds = document.getElementById("cmds");
 const elMenu = document.getElementById("menu");
 const elAc = document.getElementById("ac");
+const elSessions = document.getElementById("sessions");
+const elNewChat = document.getElementById("newchat");
+const elDebug = document.getElementById("debug");
 let COMMANDS = [];
 let CAN_CD = false;
 let CAN_MODEL = false;
@@ -324,7 +332,20 @@ function addTrust(ev) {
   if (stick) scroll();
 }
 
+function renderSessions(list, activeId) {
+  elSessions.innerHTML = "";
+  for (const s of list) {
+    const o = document.createElement("option");
+    o.value = s.id;
+    o.textContent = (s.running ? "● " : "") + (s.title || s.id);
+    elSessions.appendChild(o);
+  }
+  elSessions.value = SESSION || activeId || (list[0] && list[0].id) || "";
+}
+
 function applyState(st) {
+  if (st.sessionId) SESSION = st.sessionId;
+  if (Array.isArray(st.sessions)) renderSessions(st.sessions, st.activeId);
   elModel.textContent = st.model;
   elWs.textContent = st.workspace;
   CAN_CD = !!st.canSwitchWorkspace;
@@ -400,12 +421,43 @@ function renderAc() {
   elAc.classList.add("open");
 }
 
-async function init() {
+let es = null;
+function connect() {
+  if (es) es.close();
+  es = new EventSource("/api/events?t=" + token + sessParam());
+  es.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch {} };
+}
+async function refreshState() {
   const st = await (await q("/api/state")).json();
   applyState(st);
-  if (st.usage) elUsage.textContent = st.usage;
-  const es = new EventSource("/api/events?t=" + token);
-  es.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch {} };
+  elUsage.textContent = st.usage || "";
+}
+async function switchTo(id) {
+  if (!id || id === SESSION) return;
+  SESSION = id;
+  await q("/api/sessions/activate", { id });
+  chat.innerHTML = "";
+  acts.innerHTML = "";
+  await refreshState();
+  connect();
+}
+elSessions.onchange = () => switchTo(elSessions.value);
+elSessions.onfocus = async () => {
+  const r = await (await q("/api/sessions")).json();
+  if (Array.isArray(r.sessions)) renderSessions(r.sessions, r.activeId);
+};
+elNewChat.onclick = async () => {
+  const r = await (await q("/api/sessions", {})).json();
+  if (r.id) await switchTo(r.id);
+};
+elDebug.onclick = () => window.open("/api/debug?t=" + token + sessParam(), "_blank");
+
+async function init() {
+  const st = await (await q("/api/state")).json();
+  SESSION = st.sessionId || st.activeId || "";
+  applyState(st);
+  elUsage.textContent = st.usage || "";
+  connect();
 }
 
 function send() {
