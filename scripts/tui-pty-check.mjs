@@ -97,7 +97,12 @@ async function main() {
   term.write("/help\r");
   await waitFor(/Toggle multi-agent mode/, 8000, "/help output (3rd single-Enter line)");
 
-  // 5. Exit promptly — no hang.
+  // 5. /diff returns cleanly (no changes in this throwaway non-git workspace).
+  await sleep(300);
+  term.write("/diff\r");
+  await waitFor(/No changes in the working tree/, 8000, "/diff (no-changes path)");
+
+  // 6. Exit promptly — no hang.
   await sleep(300);
   term.write("/exit\r");
   const e = await waitExit(6000);

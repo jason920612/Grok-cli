@@ -15,7 +15,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/trust-settings", usage: "/trust-settings", description: "View or change workspace trust settings.", hidden: true },
   { name: "/workspace-trust", usage: "/workspace-trust", description: "View or change workspace trust settings.", hidden: true },
   { name: "/git-status", usage: "/git-status", description: "Show git status." },
-  { name: "/diff", usage: "/diff", description: "Show git-style diff for current changes." },
+  { name: "/diff", usage: "/diff", description: "Open the changed-files diff browser (click/space to expand, q to close)." },
   { name: "/approval", usage: "/approval", description: "Choose approval mode from a menu." },
   { name: "/agents", usage: "/agents [on|off]", description: "Toggle multi-agent mode (orchestrator + parallel sub-agents) for tasks." },
   { name: "/clear", usage: "/clear", description: "Compact and clear stale context." },

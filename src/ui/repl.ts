@@ -5,9 +5,9 @@ import type { Agent } from "../agent/Agent.js";
 import { Orchestrator } from "../agents/Orchestrator.js";
 import { formatTotals } from "../agent/SessionUsage.js";
 import { Interjections } from "../agent/Interjections.js";
+import { collectWorkingTreeDiff, runDiffBrowser, summarizeChanges } from "./diffBrowser.js";
 import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
-import { colorDiff } from "./diffView.js";
 import { ReplInput, type TranscriptEntry } from "./interactiveInput.js";
 import { visibleSlashCommands } from "./slashCommands.js";
 import type { ApprovalMode } from "../config/loadConfig.js";
@@ -89,6 +89,8 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
       );
       remember(transcript, "assistant", String(response));
       console.log(`\n${response}\n`);
+      const changed = collectWorkingTreeDiff(agent.config.workspaceRoot);
+      if (changed.length > 0) console.log(summarizeChanges(changed));
       const lap = agent.usage.lap();
       if (lap.calls > 0) console.log(chalk.dim(formatTotals(lap)));
     } catch (error) {
@@ -155,7 +157,8 @@ async function handleSlash(command: string, agent: Agent, options: ReplOptions, 
       output(JSON.stringify(await agent.tools.execute("git_status", {}, agent.toolContext()), null, 2));
       break;
     case "/diff":
-      output(formatDiffResult(await agent.tools.execute("git_diff", {}, agent.toolContext())));
+      // Full-screen, click-to-expand overlay for a TTY; plain text otherwise.
+      await runDiffBrowser(collectWorkingTreeDiff(agent.config.workspaceRoot));
       break;
     case "/approval":
       output(await chooseApproval(agent, rest[0]));
@@ -258,15 +261,4 @@ function formatSkills(agent: Agent): string {
     chalk.bold("Available to load when triggered:"),
     format(available)
   ].join("\n");
-}
-
-function formatDiffResult(result: unknown): string {
-  if (typeof result === "object" && result !== null && "ok" in result && (result as any).ok && "data" in result) {
-    const data = (result as any).data;
-    if (data && typeof data.stat === "string" && typeof data.diff === "string") {
-      const text = [`git diff --stat`, data.stat, `git diff`, data.diff].filter(Boolean).join("\n");
-      return colorDiff(text);
-    }
-  }
-  return JSON.stringify(result, null, 2);
 }
