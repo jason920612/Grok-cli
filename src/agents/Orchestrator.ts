@@ -40,7 +40,7 @@ If the task is just a QUESTION or analysis that needs NO file changes, answer it
 For any task that CHANGES files, you delegate. Process:
 1. PLAN FIRST — before doing anything else, call update_plan with the decomposition: break the task into the SMALLEST independent sub-tasks (by feature / by file / by layer). A large or multi-feature request MUST become several sub-tasks; never treat "add many features" as one lump. Keep the plan updated (one step in_progress at a time) as work proceeds.
 2. Open an issue per sub-task, then EXECUTE THEM IN PARALLEL: when sub-tasks touch NON-OVERLAPPING files, call spawn_agents ONCE with ALL of them so the workers run concurrently — do NOT spawn one worker, wait, then spawn the next. Use a single spawn_agent only when there is genuinely just one sub-task. Each worker gets a focused role and a precise, NARROW brief (one sub-task — never hand one worker the whole feature set). Workers run in isolated git worktrees and open a PR when done.
-NEVER pass a big multi-part task to a single worker. If you catch yourself writing a brief with "and also…", split it into more workers.
+NEVER pass a big multi-part task to a single worker. If you catch yourself writing a brief with "and also…", split it into more workers. Each worker has a TIGHT step budget (~30 steps) for ONE focused sub-task — do not create a "bootstrap"/"set up everything" worker; if scaffolding is needed, make it one small worker, then spawn the feature workers in parallel. If a worker reports it hit its budget without finishing, split that sub-task further and spawn several workers for the pieces.
 3. When a worker's PR is open, review_pr it; if good, merge_pr. On a merge conflict, the merge is aborted and conflicts reported — reassign or serialize the conflicting work.
 4. Maintain the issues as your plan. Do NOT give a final answer while issues remain open.
 5. VERIFY before sign-off: every worker's PR must state how it was verified (tests/run/syntax-check). If a worker did not actually exercise its code, send it back or spawn a short verification worker to run the integrated result end-to-end (run tests, execute the program, or syntax-check). Do NOT declare success on unverified code.
@@ -51,6 +51,7 @@ const WORKER_BASE = (name: string) => `You are worker sub-agent "${name}". Work 
 You are in an ISOLATED git worktree — edit files with apply_patch (read the lines first).
 VERIFY before you finish: actually exercise what you built with run_python — run the project's tests if any exist; otherwise run the script, call the function, or syntax-check it (e.g. \`node --check file.js\`, \`python -m py_compile\`, \`tsc --noEmit\`). For a web page, syntax-check the JS and confirm the element IDs/handlers referenced in the HTML and JS match. Do NOT open a PR for code you have not exercised — if verification is blocked (e.g. approval denied), say so explicitly in the PR body.
 Discuss on the board (comment) if blocked or you need clarification; @mention the orchestrator.
+You have a TIGHT step budget (~30 steps) — your sub-task should be small enough to finish well within it. If you discover it is larger than expected, do the core piece, open a PR for that, and note clearly in the PR body what remains so the orchestrator can spawn follow-up workers. Do not try to do everything yourself.
 When your task is complete AND verified, call open_pr with a clear summary that states what you verified and links your issue. That is your completion signal.`;
 
 export type OrchestratorResult = { report: string; integrationBranch: string; diff: string; ephemeral: boolean; applied: boolean };
@@ -192,6 +193,12 @@ export class Orchestrator {
       return { summary: `Worker "${spec.name}" failed: ${message}` };
     }
 
+    // Worker ran out of its step budget → the sub-task was too big. Don't open a
+    // PR for half-finished work; tell the orchestrator to split it further.
+    if (/Stopped after max steps/i.test(summary) && ![...this.board.prs.values()].some((p) => p.author === spec.name)) {
+      return { summary: `Worker "${spec.name}" hit its step budget WITHOUT finishing — the sub-task is too large. Split it into smaller, non-overlapping sub-tasks and spawn several workers (spawn_agents) for them.` };
+    }
+
     // Ensure the work is captured as a PR even if the worker forgot to open one.
     let pr = [...this.board.prs.values()].find((p) => p.author === spec.name && p.status === "open");
     if (!pr) {
@@ -264,7 +271,14 @@ export class Orchestrator {
       askUser: opts.isOrchestrator ? this.askUser : undefined
     };
 
-    const config: GrokCodeConfig = { ...this.config, workspaceRoot: opts.root };
+    // Workers get a tight step budget: one focused sub-task should fit in well
+    // under this. Hitting the cap is a signal the sub-task was too big and must
+    // be split — it stops a single worker from grinding for dozens of steps.
+    const config: GrokCodeConfig = {
+      ...this.config,
+      workspaceRoot: opts.root,
+      maxSteps: opts.isOrchestrator ? this.config.maxSteps : Math.min(this.config.maxSteps, 30)
+    };
     const events = this.eventSinkFactory(opts.agentId, !opts.isOrchestrator);
     const interjections = opts.isOrchestrator ? this.interjections : undefined;
     return new AgentLoop(this.provider, config, context, tools, toolCtx, skillLoader, toolSkills, opts.role, events, this.usage, opts.agentId, interjections);
