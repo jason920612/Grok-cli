@@ -40,6 +40,7 @@ export type SystemPreambleOptions = {
   projectInstructions: string;
   workspaceContext: string[];
   projectMemory?: string;
+  userProfile?: string;
   boardView?: string;
 };
 
@@ -74,7 +75,7 @@ ${options.projectInstructions || "None."}
 <Project Memory>
 ${options.projectMemory || "None."}
 </Project Memory>
-${options.boardView ? `\n<Collaboration Board>\n${options.boardView}\n</Collaboration Board>\n` : ""}
+${options.userProfile ? `\n<User Technical Level (by domain — calibrate scoping questions to these)>\n${options.userProfile}\n</User Technical Level>\n` : ""}${options.boardView ? `\n<Collaboration Board>\n${options.boardView}\n</Collaboration Board>\n` : ""}
 <Workspace Context>
 ${options.workspaceContext.join("\n\n") || "None."}
 </Workspace Context>`;

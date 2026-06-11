@@ -6,6 +6,7 @@ import type { ContextManager } from "../context/ContextManager.js";
 import type { ContextEngine } from "../context/ContextEngine.js";
 import type { WorkspaceSnapshotStore } from "../workspace/WorkspaceSnapshotStore.js";
 import type { ProjectMemory } from "../memory/ProjectMemory.js";
+import type { UserProfile } from "../memory/UserProfile.js";
 import type { Board } from "../agents/Board.js";
 import type { GitService } from "../agents/GitService.js";
 
@@ -26,6 +27,10 @@ export type ToolExecutionContext = {
   round?: () => number;
   /** Durable project core memory (project-memory.md). */
   memory?: ProjectMemory;
+  /** Per-domain user technical level for scoping calibration (scoping-v1). */
+  userProfile?: UserProfile;
+  /** Ask the interactive user batched conceptual questions (scoping-v1); undefined in one-shot mode. */
+  askUser?: (questions: Array<{ question: string; options?: string[] }>) => Promise<Array<{ question: string; answer: string }>>;
   /** Multi-agent collaboration board (subagents-v1). */
   board?: Board;
   /** Git worktree/branch service for parallel isolation (subagents-v1 §7.2). */

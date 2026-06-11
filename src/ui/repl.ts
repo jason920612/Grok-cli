@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { select } from "@inquirer/prompts";
+import { select, input } from "@inquirer/prompts";
 import type { Agent } from "../agent/Agent.js";
 import { formatContext } from "./formatters.js";
 import { PROJECT_UNDERSTANDING_TASK } from "../agent/projectUnderstandingTask.js";
@@ -14,8 +14,27 @@ type ReplOptions = {
   switchWorkspace?: (workspace: string) => Promise<Agent>;
 };
 
+/** Interactive scoping questions (scoping-v1 §6). Asks the user in the REPL. */
+function attachAskUser(agent: Agent): void {
+  agent.askUser = async (questions) => {
+    const answers: Array<{ question: string; answer: string }> = [];
+    for (const q of questions) {
+      console.log(chalk.cyan(q.question));
+      const answer =
+        q.options && q.options.length > 0
+          ? await select({ message: "Choose:", choices: [...q.options.map((o) => ({ name: o, value: o })), { name: "Other (type my own)", value: "__other__" }] }).then((v) =>
+              v === "__other__" ? input({ message: "Your answer:" }) : v
+            )
+          : await input({ message: "Your answer:" });
+      answers.push({ question: q.question, answer });
+    }
+    return answers;
+  };
+}
+
 export async function startRepl(initialAgent: Agent, options: ReplOptions = {}): Promise<Agent> {
   let agent = initialAgent;
+  attachAskUser(agent);
   const transcript: TranscriptEntry[] = [{ role: "system", content: "Type /help for commands, /exit to quit." }];
   for (;;) {
     const line = await readInteractiveLine("grok-code>", { transcript });
@@ -25,7 +44,10 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
     remember(transcript, "user", text);
     if (text.startsWith("/")) {
       const nextAgent = await handleSlash(text, agent, options, (content) => remember(transcript, "system", content));
-      if (nextAgent) agent = nextAgent;
+      if (nextAgent) {
+        agent = nextAgent;
+        attachAskUser(agent);
+      }
       continue;
     }
     try {

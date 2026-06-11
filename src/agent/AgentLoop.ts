@@ -71,6 +71,7 @@ export class AgentLoop {
       toolSkills: this.toolSkills.select(task, []),
       projectInstructions: this.projectInstructions,
       projectMemory: this.toolCtx.memory?.toPreamble(),
+      userProfile: this.toolCtx.userProfile?.toPreamble(),
       boardView: this.toolCtx.board?.viewFor(this.toolCtx.agentId ?? "?", this.toolCtx.agentId === "orchestrator"),
       workspaceContext: this.workspaceContext()
     });

@@ -16,6 +16,8 @@ import { createSkillTool } from "./createSkill.js";
 import { applyPatchTool } from "./applyPatch.js";
 import { runPythonTool } from "./runPython.js";
 import { rememberTool, forgetTool } from "./projectMemory.js";
+import { noteUserLevelTool } from "./userProfile.js";
+import { askUserTool } from "./askUser.js";
 import { gitStatusTool } from "./gitStatus.js";
 import { gitDiffTool } from "./gitDiff.js";
 import { startBackgroundCommandTool } from "./startBackgroundCommand.js";
@@ -39,6 +41,8 @@ export const LOCAL_TOOL_NAMES = [
   "create_skill",
   "remember",
   "forget",
+  "note_user_level",
+  "ask_user",
   "apply_patch",
   "run_python",
   "git_status",
@@ -68,6 +72,8 @@ export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry
     createSkillTool(skills),
     rememberTool(skills),
     forgetTool(skills),
+    noteUserLevelTool(skills),
+    askUserTool(skills),
     applyPatchTool(skills),
     runPythonTool(skills),
     gitStatusTool(skills),

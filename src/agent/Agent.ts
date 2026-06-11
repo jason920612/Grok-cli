@@ -11,6 +11,7 @@ import type { ToolExecutionContext } from "../tools/AgentTool.js";
 import { SkillLoader } from "../skills/SkillLoader.js";
 import { ContextEngine } from "../context/ContextEngine.js";
 import { ProjectMemory } from "../memory/ProjectMemory.js";
+import { UserProfile } from "../memory/UserProfile.js";
 import { scanRepo } from "../workspace/RepoScanner.js";
 import { AgentLoop } from "./AgentLoop.js";
 
@@ -21,6 +22,9 @@ export class Agent {
   readonly snapshots: WorkspaceSnapshotStore;
   readonly background = new BackgroundProcessManager();
   readonly memory: ProjectMemory;
+  readonly userProfile: UserProfile;
+  /** Interactive question hook; set by the REPL, undefined in one-shot mode. */
+  askUser?: ToolExecutionContext["askUser"];
   readonly approval: ApprovalPolicy;
   readonly toolSkills: ToolSkillRegistry;
   readonly tools;
@@ -31,6 +35,7 @@ export class Agent {
     this.sandbox = new WorkspaceSandbox(config.workspaceRoot, config.sandboxProfile, config.workspaceTrusted);
     this.snapshots = new WorkspaceSnapshotStore(config.workspaceRoot);
     this.memory = new ProjectMemory(config.workspaceRoot);
+    this.userProfile = new UserProfile(config.workspaceRoot);
     this.approval = new ApprovalPolicy(config.approval, originalTask);
     this.toolSkills = new ToolSkillRegistry(config.workspaceRoot);
     this.toolSkills.loadBuiltin(LOCAL_TOOL_NAMES);
@@ -68,6 +73,8 @@ export class Agent {
       engine: this.engine,
       snapshots: this.snapshots,
       memory: this.memory,
+      userProfile: this.userProfile,
+      askUser: this.askUser,
       round: () => ++this.round
     };
   }
