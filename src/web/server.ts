@@ -44,7 +44,8 @@ export type WebEvent =
   | { type: "state"; model: string; workspace: string; approval: string; agents: boolean; yes: boolean }
   | { type: "trust"; workspace: string; current: string }
   | { type: "plan"; agent: string; steps: Array<{ step: string; status: string }> }
-  | { type: "viewed"; agent: string; path: string };
+  | { type: "viewed"; agent: string; path: string }
+  | { type: "agent_usage"; agent: string; line: string; inputTokens: number; outputTokens: number; cachedInputTokens: number; calls: number };
 
 export type WebServerOptions = {
   agent: Agent;
@@ -89,6 +90,18 @@ class WebEventSink implements AgentEventSink {
     }
     if (event.type === "file_viewed") {
       this.emitWeb({ type: "viewed", agent: this.label, path: event.path });
+      return;
+    }
+    if (event.type === "usage") {
+      this.emitWeb({
+        type: "agent_usage",
+        agent: this.label,
+        line: stripAnsi(event.message),
+        inputTokens: event.inputTokens,
+        outputTokens: event.outputTokens,
+        cachedInputTokens: event.cachedInputTokens,
+        calls: event.calls
+      });
       return;
     }
     this.emitWeb({ type: "activity", agent: this.label, kind: event.type, message: stripAnsi(event.message) });

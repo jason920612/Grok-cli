@@ -68,6 +68,8 @@
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
   .agent .aname { font-weight: 600; }
   .agent .astep { margin-left: auto; color: var(--dim); font-size: 11px; }
+  .agent .ausage { padding: 2px 10px; color: var(--dim); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  .agent .ausage:empty { display: none; }
   .agent .alog { padding: 4px 10px; max-height: 160px; overflow-y: auto; }
   .agent .aline { padding: 1px 0; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
   .agent .aline.warn { color: var(--yellow); } .agent .aline.verifier { color: var(--magenta); }
@@ -370,12 +372,17 @@ function agentCard(name) {
   if (placeholder) placeholder.remove();
   const el = document.createElement("div");
   el.className = "agent running";
-  el.innerHTML = "<div class=ahead><span class=dot></span><span class=aname></span><span class=astep></span></div><div class=alog></div>";
+  el.innerHTML = "<div class=ahead><span class=dot></span><span class=aname></span><span class=astep></span></div><div class=ausage></div><div class=alog></div>";
   el.querySelector(".aname").textContent = name;
   agentsEl.appendChild(el);
-  a = { el, log: el.querySelector(".alog"), step: el.querySelector(".astep"), steps: 0 };
+  a = { el, log: el.querySelector(".alog"), step: el.querySelector(".astep"), usage: el.querySelector(".ausage"), steps: 0 };
   AGENTS.set(name, a);
   return a;
+}
+function addUsage(ev) {
+  const a = agentCard(ev.agent);
+  a.el.classList.add("running");
+  a.usage.textContent = "🪙 " + ev.line;
 }
 function addAct(ev) {
   const a = agentCard(ev.agent);
@@ -496,6 +503,7 @@ function handle(ev) {
     case "trust": addTrust(ev); break;
     case "plan": addPlan(ev); break;
     case "viewed": addViewed(ev); break;
+    case "agent_usage": addUsage(ev); break;
   }
 }
 

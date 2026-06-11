@@ -19,7 +19,8 @@ export type AgentEvent =
   | { type: "verifier"; message: string }
   | { type: "model_text"; message: string }
   | { type: "plan"; message: string; steps: PlanStep[] }
-  | { type: "file_viewed"; message: string; path: string };
+  | { type: "file_viewed"; message: string; path: string }
+  | { type: "usage"; message: string; inputTokens: number; outputTokens: number; cachedInputTokens: number; calls: number };
 
 export interface AgentEventSink {
   emit(event: AgentEvent): void;
@@ -27,6 +28,8 @@ export interface AgentEventSink {
 
 export class ConsoleEventSink implements AgentEventSink {
   emit(event: AgentEvent): void {
+    // Usage is surfaced by the per-task footer / status, not per-call console lines.
+    if (event.type === "usage") return;
     if (event.type === "warn") console.log(`[Warning] ${event.message}`);
     else console.log(event.message);
   }
@@ -58,6 +61,9 @@ export class LabeledEventSink implements AgentEventSink {
   emit(event: AgentEvent): void {
     const line = (body: string) => console.log(`${this.indent}${this.tag} ${body}`);
     switch (event.type) {
+      case "usage":
+        line(chalk.dim(event.message));
+        break;
       case "warn":
         line(chalk.yellow(event.message));
         break;

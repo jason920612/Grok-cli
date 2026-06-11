@@ -20,7 +20,7 @@ import { EmptyResponseGuard, PlanOnlyGuard, MultiToolGuard, type ResponseGuard }
 import { RollingSummarizer, mergeSummaries, renderSummary, EMPTY_SUMMARY, type EpisodeSummary } from "../context/RollingSummarizer.js";
 export { shouldContinueAfterPlanOnlyResponse } from "./ResponseGuards.js";
 import { ConsoleEventSink, type AgentEventSink } from "./AgentEvents.js";
-import type { SessionUsage } from "./SessionUsage.js";
+import { formatTotals, type SessionUsage } from "./SessionUsage.js";
 import type { Interjections } from "./Interjections.js";
 
 /**
@@ -30,6 +30,8 @@ import type { Interjections } from "./Interjections.js";
  */
 export class AgentLoop {
   private readonly verifier?: VerifierAgent;
+  /** This agent's own cumulative token usage, surfaced per-call so each agent's progress is visible. */
+  private readonly ownUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, calls: 0 };
   private readonly emptyGuard = new EmptyResponseGuard();
   private readonly planOnlyGuard = new PlanOnlyGuard();
   private readonly multiToolGuard = new MultiToolGuard();
@@ -122,6 +124,13 @@ export class AgentLoop {
         if (spinner) spinner.stop();
       }
       this.usage?.record(response.usage);
+      if (response.usage) {
+        this.ownUsage.calls += 1;
+        this.ownUsage.inputTokens += response.usage.inputTokens ?? 0;
+        this.ownUsage.outputTokens += response.usage.outputTokens ?? 0;
+        this.ownUsage.cachedInputTokens += response.usage.cachedInputTokens ?? 0;
+        this.events.emit({ type: "usage", message: formatTotals(this.ownUsage), ...this.ownUsage });
+      }
       state.throwIfAborted();
       for (const warning of response.warnings) this.events.emit({ type: "warn", message: warning });
 
