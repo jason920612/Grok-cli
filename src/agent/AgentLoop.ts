@@ -42,7 +42,9 @@ export class AgentLoop {
     private readonly toolSkills: ToolSkillRegistry,
     private readonly projectInstructions: string,
     private readonly events: AgentEventSink = new ConsoleEventSink(),
-    private readonly usage?: SessionUsage
+    private readonly usage?: SessionUsage,
+    /** Agent label for multi-agent runs; when set, live spinners are suppressed. */
+    private readonly label?: string
   ) {
     this.verifier = config.enableVerifier ? new VerifierAgent(provider, config) : undefined;
     this.summarizer = config.enableLlmSummary ? new RollingSummarizer(provider) : undefined;
@@ -86,7 +88,10 @@ export class AgentLoop {
       this.context.nextStep(task);
       this.compactTranscript(messages);
 
-      const spinner = ora(`Grok thinking (step ${state.step})`).start();
+      // Labeled (multi-agent) loops skip the live spinner — concurrent workers
+      // would corrupt each other's spinner on a shared TTY; their progress shows
+      // as prefixed event lines instead.
+      const spinner = this.label ? null : ora(`Grok thinking (step ${state.step})`).start();
       let response;
       try {
         response = await this.provider.complete({
@@ -98,7 +103,7 @@ export class AgentLoop {
           signal
         });
       } finally {
-        spinner.stop();
+        spinner?.stop();
       }
       this.usage?.record(response.usage);
       state.throwIfAborted();

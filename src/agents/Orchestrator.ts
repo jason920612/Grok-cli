@@ -14,6 +14,7 @@ import type { AgentTool, ToolExecutionContext, SpawnWorker } from "../tools/Agen
 import { ToolRegistry } from "../tools/ToolRegistry.js";
 import { scanRepo } from "../workspace/RepoScanner.js";
 import { AgentLoop } from "../agent/AgentLoop.js";
+import { LabeledEventSink } from "../agent/AgentEvents.js";
 import type { SessionUsage } from "../agent/SessionUsage.js";
 import { Board } from "./Board.js";
 import { GitService } from "./GitService.js";
@@ -207,6 +208,7 @@ export class Orchestrator {
     };
 
     const config: GrokCodeConfig = { ...this.config, workspaceRoot: opts.root };
-    return new AgentLoop(this.provider, config, context, tools, toolCtx, skillLoader, toolSkills, opts.role, undefined, this.usage);
+    const events = new LabeledEventSink(opts.agentId, !opts.isOrchestrator);
+    return new AgentLoop(this.provider, config, context, tools, toolCtx, skillLoader, toolSkills, opts.role, events, this.usage, opts.agentId);
   }
 }
