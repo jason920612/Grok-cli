@@ -443,7 +443,8 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
           agent.approval.setMode(body.yes ? "auto-all" : modeBeforeAuto);
           agent.config.approval = agent.approval.mode;
         }
-        emit({ type: "mode", agents: useAgents, yes: agent.approval.mode === "auto-all" });
+        // Full state event so the approval dropdown AND the toggles stay in sync.
+        emit(stateEvent());
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
         return;
