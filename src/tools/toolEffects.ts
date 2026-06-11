@@ -28,6 +28,8 @@ export const TOOL_EFFECTS: Record<string, ToolEffects> = {
   // Mutating / effectful
   apply_patch: { readOnly: false, modifiesWorkspace: true, isShell: false, countsAsProgress: true },
   create_skill: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },
+  remember: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },
+  forget: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },
   run_python: { readOnly: false, modifiesWorkspace: false, isShell: true, countsAsProgress: false },
   start_background_command: { readOnly: false, modifiesWorkspace: false, isShell: true, countsAsProgress: false },
   stop_background_command: { readOnly: false, modifiesWorkspace: false, isShell: false, countsAsProgress: true },

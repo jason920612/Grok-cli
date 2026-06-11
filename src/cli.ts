@@ -1,6 +1,8 @@
 import { Command } from "commander";
 import { createXaiProvider } from "./api/XaiResponsesProvider.js";
 import { Agent } from "./agent/Agent.js";
+import { Orchestrator } from "./agents/Orchestrator.js";
+import { randomUUID } from "node:crypto";
 import { loadConfig, type ApprovalMode, type SandboxProfile, type ToolChoice, type ConversationMode } from "./config/loadConfig.js";
 import { startRepl } from "./ui/repl.js";
 import { formatSessionStatus, printHeader } from "./ui/terminal.js";
@@ -23,6 +25,7 @@ type CliOpts = {
   xSearch?: boolean;
   conversationMode?: ConversationMode;
   verifier?: boolean;
+  agents?: boolean;
 };
 
 let activeSigintCleanup: (() => void) | undefined;
@@ -42,7 +45,8 @@ export async function main(): Promise<void> {
     .option("--no-web-search", "Disable xAI web_search server-side tool")
     .option("--no-x-search", "Disable xAI x_search server-side tool")
     .option("--conversation-mode <mode>", "stateful|stateless|hybrid", "stateless")
-    .option("--verifier", "Enable independent verifier agent after each final answer");
+    .option("--verifier", "Enable independent verifier agent after each final answer")
+    .option("--agents", "Multi-agent mode: an orchestrator delegates to parallel sub-agents via a local issue/PR board and git worktrees");
 
   program.command("ask <question...>").description("Ask a question").action(async (question: string[]) => runOne(question.join(" "), program.opts<CliOpts>(), "ask"));
   program.command("edit <task...>").description("Run an edit task").action(async (task: string[]) => runOne(task.join(" "), program.opts<CliOpts>(), "edit"));
@@ -132,7 +136,31 @@ export function parseConversationMode(value?: string): ConversationMode | undefi
   return value as ConversationMode;
 }
 
+async function runTeam(task: string, opts: CliOpts): Promise<void> {
+  const cwd = process.cwd();
+  const workspaceTrusted = Boolean(new WorkspaceTrustStore().getTrustFor(cwd));
+  const config = loadConfig(cwd, {
+    model: opts.model,
+    approval: opts.approval,
+    sandboxProfile: parseSandboxProfile(opts.profile),
+    workspaceTrusted,
+    toolChoice: opts.toolChoice,
+    maxSteps: parseMaxSteps(opts.maxSteps),
+    enableVerifier: opts.verifier === true ? true : undefined
+  });
+  const provider = createXaiProvider({ model: config.model });
+  printHeader(config.model, config.workspaceRoot);
+  console.log("Multi-agent mode: orchestrator + parallel sub-agents (git worktrees).");
+  const orchestrator = new Orchestrator(provider, config, randomUUID().slice(0, 8), task);
+  const result = await orchestrator.run(task);
+  console.log(result.report);
+  console.log(`\n[Integration branch] ${result.integrationBranch}`);
+  console.log(result.diff ? `[Diff]\n${result.diff}` : "[Diff] (no changes integrated)");
+  console.log(`\nReview with: git diff HEAD..${result.integrationBranch}  |  merge with: git merge ${result.integrationBranch}`);
+}
+
 async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void> {
+  if (opts.agents) return runTeam(task, opts);
   const agent = await makeAgent(opts, task);
   const answer = await agent.run(task, true);
   console.log(answer);

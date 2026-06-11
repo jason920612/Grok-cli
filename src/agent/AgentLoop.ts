@@ -70,6 +70,8 @@ export class AgentLoop {
       generalSkills: this.skillLoader.select(task),
       toolSkills: this.toolSkills.select(task, []),
       projectInstructions: this.projectInstructions,
+      projectMemory: this.toolCtx.memory?.toPreamble(),
+      boardView: this.toolCtx.board?.viewFor(this.toolCtx.agentId ?? "?", this.toolCtx.agentId === "orchestrator"),
       workspaceContext: this.workspaceContext()
     });
     const messages: ModelMessage[] = [

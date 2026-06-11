@@ -39,6 +39,8 @@ export type SystemPreambleOptions = {
   toolSkills: ToolSkill[];
   projectInstructions: string;
   workspaceContext: string[];
+  projectMemory?: string;
+  boardView?: string;
 };
 
 /**
@@ -69,6 +71,10 @@ ${options.toolSkills.map((skill) => skill.full).join("\n\n") || "None."}
 ${options.projectInstructions || "None."}
 </Project Instructions>
 
+<Project Memory>
+${options.projectMemory || "None."}
+</Project Memory>
+${options.boardView ? `\n<Collaboration Board>\n${options.boardView}\n</Collaboration Board>\n` : ""}
 <Workspace Context>
 ${options.workspaceContext.join("\n\n") || "None."}
 </Workspace Context>`;

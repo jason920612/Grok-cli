@@ -5,6 +5,12 @@ import type { BackgroundProcessManager } from "../background/BackgroundProcessMa
 import type { ContextManager } from "../context/ContextManager.js";
 import type { ContextEngine } from "../context/ContextEngine.js";
 import type { WorkspaceSnapshotStore } from "../workspace/WorkspaceSnapshotStore.js";
+import type { ProjectMemory } from "../memory/ProjectMemory.js";
+import type { Board } from "../agents/Board.js";
+import type { GitService } from "../agents/GitService.js";
+
+/** Spawns a worker sub-agent, runs it to completion, returns its result (subagents-v1). */
+export type SpawnWorker = (spec: { name: string; role: string; brief: string }) => Promise<{ prNumber?: number; summary: string }>;
 
 export type ToolExecutionContext = {
   workspaceRoot: string;
@@ -18,6 +24,16 @@ export type ToolExecutionContext = {
   snapshots?: WorkspaceSnapshotStore;
   /** Monotonic round clock for snapshot retention. */
   round?: () => number;
+  /** Durable project core memory (project-memory.md). */
+  memory?: ProjectMemory;
+  /** Multi-agent collaboration board (subagents-v1). */
+  board?: Board;
+  /** Git worktree/branch service for parallel isolation (subagents-v1 §7.2). */
+  git?: GitService;
+  /** This agent's id on the board ("orchestrator" or a worker name). */
+  agentId?: string;
+  /** Run a worker sub-agent (orchestrator only). */
+  spawnWorker?: SpawnWorker;
 };
 
 export type ToolExecutor<TArgs = unknown, TResult = unknown> = (

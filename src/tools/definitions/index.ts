@@ -15,6 +15,7 @@ import { expandNodeTool } from "./expandNode.js";
 import { createSkillTool } from "./createSkill.js";
 import { applyPatchTool } from "./applyPatch.js";
 import { runPythonTool } from "./runPython.js";
+import { rememberTool, forgetTool } from "./projectMemory.js";
 import { gitStatusTool } from "./gitStatus.js";
 import { gitDiffTool } from "./gitDiff.js";
 import { startBackgroundCommandTool } from "./startBackgroundCommand.js";
@@ -36,6 +37,8 @@ export const LOCAL_TOOL_NAMES = [
   "get_related_files",
   "expand_node",
   "create_skill",
+  "remember",
+  "forget",
   "apply_patch",
   "run_python",
   "git_status",
@@ -63,6 +66,8 @@ export function createLocalToolRegistry(skills: ToolSkillRegistry): ToolRegistry
     getRelatedFilesTool(skills),
     expandNodeTool(skills),
     createSkillTool(skills),
+    rememberTool(skills),
+    forgetTool(skills),
     applyPatchTool(skills),
     runPythonTool(skills),
     gitStatusTool(skills),
