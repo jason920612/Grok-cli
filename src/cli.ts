@@ -47,7 +47,14 @@ type CliOpts = {
   conversationMode?: ConversationMode;
   verifier?: boolean;
   agents?: boolean;
+  yes?: boolean;
 };
+
+/** `--yes` forces always-approve (auto-all), unless an explicit --approval was given. */
+function effectiveApproval(opts: CliOpts): ApprovalMode | undefined {
+  if (opts.yes && (opts.approval === undefined || opts.approval === "on-request")) return "auto-all";
+  return opts.approval;
+}
 
 let activeSigintCleanup: (() => void) | undefined;
 
@@ -67,7 +74,8 @@ export async function main(): Promise<void> {
     .option("--no-x-search", "Disable xAI x_search server-side tool")
     .option("--conversation-mode <mode>", "stateful|stateless|hybrid", "stateless")
     .option("--verifier", "Enable independent verifier agent after each final answer")
-    .option("--no-agents", "Disable multi-agent mode and use a single agent (multi-agent is the default for one-shot tasks)");
+    .option("--no-agents", "Disable multi-agent mode and use a single agent (multi-agent is the default for one-shot tasks)")
+    .option("--yes", "Always approve: auto-approve every prompt (destructive commands are still blocked)");
 
   program.command("ask <question...>").description("Ask a question").action(async (question: string[]) => runOne(question.join(" "), program.opts<CliOpts>(), "ask"));
   program.command("edit <task...>").description("Run an edit task").action(async (task: string[]) => runOne(task.join(" "), program.opts<CliOpts>(), "edit"));
@@ -94,7 +102,7 @@ async function makeAgent(opts: CliOpts, task = "", cwd = process.cwd()): Promise
   const workspaceTrusted = Boolean(new WorkspaceTrustStore().getTrustFor(cwd));
   const config = loadConfig(cwd, {
     model: opts.model,
-    approval: opts.approval,
+    approval: effectiveApproval(opts),
     sandboxProfile: parseSandboxProfile(opts.profile),
     workspaceTrusted,
     toolChoice: opts.toolChoice,
@@ -162,7 +170,7 @@ async function runTeam(task: string, opts: CliOpts): Promise<void> {
   const workspaceTrusted = Boolean(new WorkspaceTrustStore().getTrustFor(cwd));
   const config = loadConfig(cwd, {
     model: opts.model,
-    approval: opts.approval,
+    approval: effectiveApproval(opts),
     sandboxProfile: parseSandboxProfile(opts.profile),
     workspaceTrusted,
     toolChoice: opts.toolChoice,

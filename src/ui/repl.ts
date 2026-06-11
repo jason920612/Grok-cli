@@ -48,12 +48,17 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
   const history: string[] = [];
   const replInput = new ReplInput(history);
   let useAgents = options.multiAgentDefault ?? false;
+  // "Always approve" toggle: when on, approval is auto-all (every ask-level op is
+  // approved; the hard-deny safety net still blocks destructive commands). The
+  // pre-toggle mode is restored when turned off.
+  let autoApprove = agent.approval.mode === "auto-all";
+  let modeBeforeAuto = autoApprove ? "on-request" : agent.approval.mode;
 
   console.log(chalk.dim(`Type ${chalk.cyan("/help")} for commands, ${chalk.cyan("/exit")} to quit. Esc or Ctrl+C interrupts a running task.`));
   for (;;) {
     let line: string;
     try {
-      line = await replInput.readLine(useAgents ? "grok-code ⚡" : "grok-code>");
+      line = await replInput.readLine(`grok-code${useAgents ? " ⚡" : ""}${autoApprove ? " ✓auto" : ""}>`);
     } catch {
       break; // stdin closed
     }
@@ -66,6 +71,21 @@ export async function startRepl(initialAgent: Agent, options: ReplOptions = {}):
       const arg = text.split(/\s+/)[1]?.toLowerCase();
       useAgents = arg === "on" ? true : arg === "off" ? false : !useAgents;
       const msg = `Multi-agent mode ${useAgents ? chalk.green("ON") : chalk.yellow("OFF")} — ${useAgents ? "orchestrator delegates to parallel sub-agents (changes applied to your files)" : "single agent"}.`;
+      remember(transcript, "system", msg);
+      console.log(msg);
+      continue;
+    }
+
+    if (text === "/yes" || text.startsWith("/yes ")) {
+      const arg = text.split(/\s+/)[1]?.toLowerCase();
+      const next = arg === "on" ? true : arg === "off" ? false : !autoApprove;
+      if (next && !autoApprove) modeBeforeAuto = agent.approval.mode;
+      autoApprove = next;
+      agent.approval.setMode(autoApprove ? "auto-all" : (modeBeforeAuto as typeof agent.approval.mode));
+      agent.config.approval = agent.approval.mode;
+      const msg = autoApprove
+        ? `Always-approve ${chalk.green("ON")} — auto-approving every prompt (run_python, install, network, global changes). ${chalk.dim("Destructive commands are still blocked.")}`
+        : `Always-approve ${chalk.yellow("OFF")} — back to ${chalk.cyan(agent.approval.mode)}.`;
       remember(transcript, "system", msg);
       console.log(msg);
       continue;

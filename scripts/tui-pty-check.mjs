@@ -102,7 +102,12 @@ async function main() {
   term.write("/diff\r");
   await waitFor(/No changes in the working tree/, 8000, "/diff (no-changes path)");
 
-  // 6. Exit promptly — no hang.
+  // 6. /yes toggles always-approve.
+  await sleep(300);
+  term.write("/yes\r");
+  await waitFor(/Always-approve.*ON/, 8000, "/yes toggle");
+
+  // 7. Exit promptly — no hang.
   await sleep(300);
   term.write("/exit\r");
   const e = await waitExit(6000);

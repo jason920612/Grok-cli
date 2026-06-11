@@ -18,6 +18,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "/diff", usage: "/diff", description: "Open the changed-files diff browser (click/space to expand, q to close)." },
   { name: "/approval", usage: "/approval", description: "Choose approval mode from a menu." },
   { name: "/agents", usage: "/agents [on|off]", description: "Toggle multi-agent mode (orchestrator + parallel sub-agents) for tasks." },
+  { name: "/yes", usage: "/yes [on|off]", description: "Toggle always-approve (auto-approve every prompt; destructive commands still blocked)." },
   { name: "/clear", usage: "/clear", description: "Compact and clear stale context." },
   { name: "/model", usage: "/model <model>", description: "Show model change guidance.", hidden: true },
   { name: "/resume", usage: "/resume", description: "Show resume guidance.", hidden: true },
