@@ -112,17 +112,26 @@ test("/approval command changes the mode", async () => {
   });
 });
 
-test("reconnect with Last-Event-ID replays only missed events (no duplicate flood)", async () => {
-  await withServer(async ({ base, token }) => {
-    // Buffer has the demo "mode" event (seq 1). A reconnect past it replays nothing.
-    const res = await fetch(`${base}/api/events?t=${token}&lastEventId=999`);
-    const reader = res.body.getReader();
-    const read = reader.read();
-    const timed = await Promise.race([read, new Promise((r) => setTimeout(() => r({ value: undefined, done: false }), 400))]);
-    const text = timed.value ? new TextDecoder().decode(timed.value) : "";
-    assert.doesNotMatch(text, /"type":"mode"/, "already-seen events are not replayed");
-    await reader.cancel();
+test("reconnect with Last-Event-ID replays only events after that id", async () => {
+  // Two buffered events (seq 1 = mode, seq 2 = output). Reconnecting past seq 1
+  // must replay seq 2 only — the data arrives immediately, so no blocking read.
+  const server = await startWebServer({
+    agent: fakeAgent(),
+    demoEvents: [{ type: "mode", agents: true, yes: false }, { type: "output", title: "T", text: "X" }],
+    openBrowser: false
   });
+  const token = new URL(server.url).searchParams.get("t");
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/events?t=${token}&lastEventId=1`);
+    const reader = res.body.getReader();
+    const { value } = await reader.read();
+    const text = new TextDecoder().decode(value);
+    assert.match(text, /"type":"output"/, "events after lastEventId are replayed");
+    assert.doesNotMatch(text, /"type":"mode"/, "events up to lastEventId are skipped");
+    await reader.cancel();
+  } finally {
+    await server.close();
+  }
 });
 
 test("toggle flips always-approve to auto-all and back", async () => {

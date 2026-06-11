@@ -358,6 +358,7 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
       const heartbeat = setInterval(() => {
         try { res.write(":hb\n\n"); } catch { /* pruned on next emit */ }
       }, 25_000);
+      heartbeat.unref?.(); // never let the keep-alive heartbeat hold the process open
       req.on("close", () => {
         clearInterval(heartbeat);
         clients.delete(res);
@@ -455,6 +456,14 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
     res.end("Not found");
   });
 
+  // Track raw sockets so close() can forcibly tear down lingering keep-alive
+  // SSE connections (closeAllConnections alone proved unreliable here).
+  const sockets = new Set<import("node:net").Socket>();
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+
   await new Promise<void>((resolve) => server.listen(opts.port ?? 0, "127.0.0.1", resolve));
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : 0;
@@ -467,8 +476,25 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
     port,
     close: () =>
       new Promise<void>((resolve) => {
-        for (const res of clients) res.end();
+        // Destroy the SSE sockets outright so close() doesn't wait on lingering
+        // keep-alive connections (otherwise it stalls until the next heartbeat).
+        for (const res of clients) {
+          try {
+            res.destroy();
+          } catch {
+            /* ignore */
+          }
+        }
         clients.clear();
+        for (const socket of sockets) {
+          try {
+            socket.destroy();
+          } catch {
+            /* ignore */
+          }
+        }
+        sockets.clear();
+        server.closeAllConnections?.();
         server.close(() => resolve());
       })
   };
