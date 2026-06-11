@@ -33,8 +33,54 @@ export class GitService {
     this.integrationDir = path.join(this.base, "integration");
   }
 
+  private ephemeral = false;
+
   isGitRepo(): boolean {
     return this.run(["rev-parse", "--is-inside-work-tree"], this.repoRoot).ok;
+  }
+
+  get isEphemeral(): boolean {
+    return this.ephemeral;
+  }
+
+  /**
+   * For a non-git workspace: initialise a throwaway git repo behind the scenes
+   * so multi-agent worktrees work. Heavy/agent dirs are excluded from the
+   * baseline commit via .git/info/exclude (no visible .gitignore is added).
+   * Finalised by `applyIntegrationToWorkingTree` + `removeEphemeralGit`, leaving
+   * the user's folder with the changes applied and no trace of git.
+   */
+  initEphemeral(): void {
+    this.run(["init", "-q"], this.repoRoot);
+    this.run(["checkout", "-q", "-b", "main"], this.repoRoot);
+    this.run(["config", "user.email", "grok@local"], this.repoRoot);
+    this.run(["config", "user.name", "grok"], this.repoRoot);
+    // Preserve the user's line endings exactly (don't rewrite their files).
+    this.run(["config", "core.autocrlf", "false"], this.repoRoot);
+    try {
+      const excludePath = path.join(this.repoRoot, ".git", "info", "exclude");
+      fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+      fs.appendFileSync(excludePath, "\nnode_modules/\ndist/\n.grok-code/\ncoverage/\n*.log\n");
+    } catch {
+      /* best effort */
+    }
+    this.run(["add", "-A"], this.repoRoot);
+    this.run(["commit", "-q", "-m", "baseline", "--allow-empty"], this.repoRoot);
+    this.ephemeral = true;
+  }
+
+  /** Bring the integrated result into the user's working tree (ephemeral finalize). */
+  applyIntegrationToWorkingTree(): void {
+    this.run(["merge", "--no-edit", this.integrationBranch], this.repoRoot);
+  }
+
+  /** Remove the throwaway git repo; the working-tree changes remain. */
+  removeEphemeralGit(): void {
+    try {
+      fs.rmSync(path.join(this.repoRoot, ".git"), { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
   }
 
   /** Create the integration branch + worktree from HEAD. */

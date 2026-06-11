@@ -107,6 +107,31 @@ function routedProvider(queues) {
   };
 }
 
+test("non-git workspace: ephemeral git applies the result to the working tree and removes .git", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "grok-eph-"));
+  fs.writeFileSync(path.join(root, "README.md"), "# project\n");
+  assert.equal(fs.existsSync(path.join(root, ".git")), false);
+
+  const provider = scriptedProvider([
+    fnCall("open_issue", { title: "Add util", body: "create util.txt", assignees: ["w1"] }),
+    fnCall("spawn_agent", { name: "w1", role: "create util", brief: "Create util.txt with 'UTIL'." }),
+    fnCall("apply_patch", { patch: "*** Begin Patch\n*** Add File: util.txt\n+UTIL\n*** End Patch", reason: "u" }),
+    fnCall("open_pr", { title: "add util.txt", body: "done", linkedIssue: 1 }),
+    text("w1 done"),
+    fnCall("merge_pr", { number: 2 }),
+    text("Done; applied.")
+  ]);
+
+  const orch = new Orchestrator(provider, config(root), "eph-run", "add util");
+  const result = await orch.run("Add util.txt with 'UTIL'.");
+
+  assert.equal(result.ephemeral, true);
+  // change is applied directly to the user's working tree
+  assert.equal(fs.readFileSync(path.join(root, "util.txt"), "utf8"), "UTIL\n");
+  // and git is gone — the user never sees it
+  assert.equal(fs.existsSync(path.join(root, ".git")), false);
+});
+
 test("orchestrator runs two workers in parallel on disjoint files and merges both", async () => {
   const root = gitRepo();
   // Workers run concurrently (Promise.all), so route provider responses per agent.

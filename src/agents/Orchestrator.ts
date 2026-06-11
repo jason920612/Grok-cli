@@ -29,8 +29,9 @@ import {
   openPrTool
 } from "../tools/definitions/collaboration.js";
 
-const ORCHESTRATOR_ROLE = `You are the ORCHESTRATOR of a team of sub-agents. You do NOT edit files yourself — you delegate.
-Process:
+const ORCHESTRATOR_ROLE = `You are the ORCHESTRATOR of a team of sub-agents.
+If the task is just a QUESTION or analysis that needs NO file changes, answer it DIRECTLY using your read tools (read_file_range, search_text, get_file_overview, git_status/diff) — do NOT open issues or spawn workers for that.
+For any task that CHANGES files, you do NOT edit files yourself — you delegate. Process:
 1. Decompose the task into independent sub-tasks. Prefer sub-tasks on NON-OVERLAPPING files to avoid merge conflicts.
 2. Open an issue per sub-task. To execute, prefer spawn_agents to launch several workers IN PARALLEL when their sub-tasks touch non-overlapping files; use spawn_agent for a single worker. Give each a focused role and a precise brief. Workers run in isolated git worktrees and open a PR when done.
 3. When a worker's PR is open, review_pr it; if good, merge_pr. On a merge conflict, the merge is aborted and conflicts reported — reassign or serialize the conflicting work.
@@ -43,7 +44,7 @@ You are in an ISOLATED git worktree — edit files with apply_patch (read the li
 Discuss on the board (comment) if blocked or you need clarification; @mention the orchestrator.
 When your task is complete, call open_pr with a clear summary and link your issue. That is your completion signal.`;
 
-export type OrchestratorResult = { report: string; integrationBranch: string; diff: string };
+export type OrchestratorResult = { report: string; integrationBranch: string; diff: string; ephemeral: boolean };
 
 /**
  * Drives a multi-agent run (subagents-v1). The orchestrator is an AgentLoop with
@@ -58,6 +59,7 @@ export class Orchestrator {
   private readonly approval: ApprovalPolicy;
   private readonly memory: ProjectMemory;
   private spawnCount = 0;
+  private setupDone = false;
 
   constructor(
     private readonly provider: LLMProvider,
@@ -71,13 +73,17 @@ export class Orchestrator {
   }
 
   async run(task: string, signal?: AbortSignal): Promise<OrchestratorResult> {
-    if (!this.git.isGitRepo()) {
-      throw new Error("Multi-agent mode requires a git repository (parallel isolation uses git worktrees).");
-    }
-    this.git.setup();
+    // Non-git workspace: set up a throwaway git repo behind the scenes; the
+    // integrated result is applied to the working tree and git is removed after,
+    // so the user never sees git was used.
+    const ephemeral = !this.git.isGitRepo();
+    if (ephemeral) this.git.initEphemeral();
     try {
+      // The orchestrator reads the user's actual working tree; git worktrees are
+      // only created lazily once it delegates (see ensureSetup). Pure questions
+      // never touch git.
       const loop = this.buildLoop({
-        root: this.git.integrationDir,
+        root: this.config.workspaceRoot,
         agentId: "orchestrator",
         role: ORCHESTRATOR_ROLE,
         isOrchestrator: true,
@@ -94,17 +100,29 @@ export class Orchestrator {
         ]
       });
       const report = await loop.run(task, true, signal);
-      const diff = this.git.integrationDiff();
-      return { report, integrationBranch: this.git.integrationBranch, diff };
+      let diff = "";
+      if (this.setupDone) {
+        diff = this.git.integrationDiff();
+        if (ephemeral) this.git.applyIntegrationToWorkingTree();
+      }
+      return { report, integrationBranch: this.git.integrationBranch, diff, ephemeral };
     } finally {
-      this.git.teardown();
+      if (this.setupDone) this.git.teardown();
+      if (ephemeral) this.git.removeEphemeralGit();
     }
   }
 
+  private ensureSetup(): void {
+    if (this.setupDone) return;
+    this.git.setup();
+    this.setupDone = true;
+  }
+
   private readonly spawnWorker: SpawnWorker = async (spec) => {
-    if (this.spawnCount >= (this.config.maxSteps ? 12 : 12)) {
+    if (this.spawnCount >= 12) {
       return { summary: "Spawn budget exhausted; cannot create more workers." };
     }
+    this.ensureSetup();
     this.spawnCount++;
     const { dir } = this.git.addWorker(spec.name);
     const loop = this.buildLoop({

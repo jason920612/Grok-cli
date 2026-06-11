@@ -3,6 +3,16 @@ import { createXaiProvider } from "./api/XaiResponsesProvider.js";
 import { Agent } from "./agent/Agent.js";
 import { Orchestrator } from "./agents/Orchestrator.js";
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
+
+function isGitAvailable(): boolean {
+  try {
+    execFileSync("git", ["--version"], { stdio: "ignore", windowsHide: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
 import { loadConfig, type ApprovalMode, type SandboxProfile, type ToolChoice, type ConversationMode } from "./config/loadConfig.js";
 import { startRepl } from "./ui/repl.js";
 import { formatSessionStatus, printHeader } from "./ui/terminal.js";
@@ -46,7 +56,7 @@ export async function main(): Promise<void> {
     .option("--no-x-search", "Disable xAI x_search server-side tool")
     .option("--conversation-mode <mode>", "stateful|stateless|hybrid", "stateless")
     .option("--verifier", "Enable independent verifier agent after each final answer")
-    .option("--agents", "Multi-agent mode: an orchestrator delegates to parallel sub-agents via a local issue/PR board and git worktrees");
+    .option("--no-agents", "Disable multi-agent mode and use a single agent (multi-agent is the default for one-shot tasks)");
 
   program.command("ask <question...>").description("Ask a question").action(async (question: string[]) => runOne(question.join(" "), program.opts<CliOpts>(), "ask"));
   program.command("edit <task...>").description("Run an edit task").action(async (task: string[]) => runOne(task.join(" "), program.opts<CliOpts>(), "edit"));
@@ -154,13 +164,23 @@ async function runTeam(task: string, opts: CliOpts): Promise<void> {
   const orchestrator = new Orchestrator(provider, config, randomUUID().slice(0, 8), task);
   const result = await orchestrator.run(task);
   console.log(result.report);
-  console.log(`\n[Integration branch] ${result.integrationBranch}`);
-  console.log(result.diff ? `[Diff]\n${result.diff}` : "[Diff] (no changes integrated)");
-  console.log(`\nReview with: git diff HEAD..${result.integrationBranch}  |  merge with: git merge ${result.integrationBranch}`);
+  if (result.ephemeral) {
+    if (result.diff) console.log(`\n[Changes applied to your files]\n${result.diff}`);
+  } else {
+    console.log(`\n[Integration branch] ${result.integrationBranch}`);
+    console.log(result.diff ? `[Diff]\n${result.diff}` : "[Diff] (no changes integrated)");
+    console.log(`\nReview with: git diff HEAD..${result.integrationBranch}  |  merge with: git merge ${result.integrationBranch}`);
+  }
 }
 
 async function runOne(task: string, opts: CliOpts, _kind: string): Promise<void> {
-  if (opts.agents) return runTeam(task, opts);
+  // Multi-agent is the default for one-shot tasks. A non-git workspace gets a
+  // throwaway git repo behind the scenes (removed after). Only fall back to a
+  // single agent if git is not installed at all, or multi-agent is disabled.
+  if (opts.agents !== false) {
+    if (isGitAvailable()) return runTeam(task, opts);
+    console.log("(git is not installed — using a single agent)");
+  }
   const agent = await makeAgent(opts, task);
   const answer = await agent.run(task, true);
   console.log(answer);
