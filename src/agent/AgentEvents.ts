@@ -18,7 +18,8 @@ export type AgentEvent =
   | { type: "tool_batch"; step: number; message: string }
   | { type: "verifier"; message: string }
   | { type: "model_text"; message: string }
-  | { type: "plan"; message: string; steps: PlanStep[] };
+  | { type: "plan"; message: string; steps: PlanStep[] }
+  | { type: "file_viewed"; message: string; path: string };
 
 export interface AgentEventSink {
   emit(event: AgentEvent): void;

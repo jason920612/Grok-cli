@@ -191,6 +191,16 @@ export class AgentLoop {
       const out = await executor.executeOne(call, state.step, signal);
       messages.push({ role: "tool", toolCallId: call.id, content: out.output });
 
+      // Surface files the agent looks at, so the UI can show their contents.
+      if (call.name === "read_file_range" || call.name === "get_file_overview") {
+        try {
+          const p = JSON.parse(call.argsJson)?.path;
+          if (typeof p === "string" && p) this.events.emit({ type: "file_viewed", message: `viewed ${p}`, path: p });
+        } catch {
+          /* ignore */
+        }
+      }
+
       // Surface the maintained plan to the UI (progress panel) when it changes.
       if (call.name === "update_plan") {
         try {

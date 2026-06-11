@@ -39,6 +39,9 @@ const DEMO_EVENTS = [
   { type: "activity", agent: "worker:html", kind: "tool_batch", message: "step 1: apply_patch index.html" },
   { type: "activity", agent: "worker:js", kind: "tool_batch", message: "step 1: apply_patch app.js" },
   { type: "activity", agent: "worker:js", kind: "warn", message: "EDGAR rate limit — added 100ms backoff" },
+  { type: "viewed", agent: "worker:html", path: "index.html" },
+  { type: "viewed", agent: "worker:js", path: "app.js" },
+  { type: "viewed", agent: "orchestrator", path: "assets/logo.png" },
   {
     type: "request",
     id: "req1",

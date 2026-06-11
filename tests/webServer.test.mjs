@@ -1,11 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { startWebServer } from "../dist/web/server.js";
 
-function fakeAgent() {
+function fakeAgent(root = process.cwd()) {
   let mode = "on-request";
   return {
-    config: { model: "grok-build-0.1", workspaceRoot: process.cwd(), approval: "on-request" },
+    config: { model: "grok-build-0.1", workspaceRoot: root, approval: "on-request" },
     approval: {
       get mode() { return mode; },
       setMode(m) { mode = m; },
@@ -129,6 +132,27 @@ test("reconnect with Last-Event-ID replays only events after that id", async () 
     assert.match(text, /"type":"output"/, "events after lastEventId are replayed");
     assert.doesNotMatch(text, /"type":"mode"/, "events up to lastEventId are skipped");
     await reader.cancel();
+  } finally {
+    await server.close();
+  }
+});
+
+test("/api/file serves images and blocks sensitive / out-of-tree paths", async () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "grok-file-")));
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+  fs.writeFileSync(path.join(root, "pic.png"), png);
+  fs.writeFileSync(path.join(root, ".env"), "SECRET=1");
+  const server = await startWebServer({ agent: fakeAgent(root), openBrowser: false });
+  const token = new URL(server.url).searchParams.get("t");
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    const ok = await fetch(`${base}/api/file?t=${token}&path=pic.png`);
+    assert.equal(ok.status, 200);
+    assert.match(ok.headers.get("content-type") || "", /image\/png/);
+    const env = await fetch(`${base}/api/file?t=${token}&path=.env`);
+    assert.equal(env.status, 404, ".env is blocked");
+    const escaped = await fetch(`${base}/api/file?t=${token}&path=${encodeURIComponent("../escape.txt")}`);
+    assert.equal(escaped.status, 403, "out-of-tree paths are forbidden");
   } finally {
     await server.close();
   }

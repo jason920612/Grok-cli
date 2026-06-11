@@ -43,7 +43,8 @@ export type WebEvent =
   | { type: "output"; title: string; text: string }
   | { type: "state"; model: string; workspace: string; approval: string; agents: boolean; yes: boolean }
   | { type: "trust"; workspace: string; current: string }
-  | { type: "plan"; agent: string; steps: Array<{ step: string; status: string }> };
+  | { type: "plan"; agent: string; steps: Array<{ step: string; status: string }> }
+  | { type: "viewed"; agent: string; path: string };
 
 export type WebServerOptions = {
   agent: Agent;
@@ -84,6 +85,10 @@ class WebEventSink implements AgentEventSink {
   emit(event: AgentEvent): void {
     if (event.type === "plan") {
       this.emitWeb({ type: "plan", agent: this.label, steps: event.steps });
+      return;
+    }
+    if (event.type === "file_viewed") {
+      this.emitWeb({ type: "viewed", agent: this.label, path: event.path });
       return;
     }
     this.emitWeb({ type: "activity", agent: this.label, kind: event.type, message: stripAnsi(event.message) });
@@ -515,6 +520,35 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/file") {
+      // Serve a workspace file (images for inline preview, or any text/source) —
+      // path-confined to the session's workspace, with sensitive paths blocked.
+      const session = resolveSession(url);
+      const rel = url.searchParams.get("path") ?? "";
+      const root = path.resolve(session.agent.config.workspaceRoot);
+      const abs = path.resolve(root, rel);
+      const blocked = /(^|[\\/])\.(git|env)([\\/]|$)/i.test(rel) || /(^|[\\/])node_modules([\\/]|$)/.test(rel);
+      if (!abs.startsWith(root + path.sep) && abs !== root) {
+        res.writeHead(403, { "content-type": "text/plain" });
+        res.end("forbidden");
+        return;
+      }
+      try {
+        const stat = fs.statSync(abs);
+        if (!stat.isFile() || blocked || stat.size > 8_000_000) {
+          res.writeHead(404, { "content-type": "text/plain" });
+          res.end("not available");
+          return;
+        }
+        res.writeHead(200, { "content-type": contentType(abs), "cache-control": "no-cache" });
+        fs.createReadStream(abs).pipe(res);
+      } catch {
+        res.writeHead(404, { "content-type": "text/plain" });
+        res.end("not found");
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/events") {
       const session = resolveSession(url);
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
@@ -648,6 +682,16 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
         server.close(() => resolve());
       })
   };
+}
+
+const CONTENT_TYPES: Record<string, string> = {
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+  ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp", ".ico": "image/x-icon",
+  ".avif": "image/avif", ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+  ".js": "text/plain; charset=utf-8", ".json": "application/json; charset=utf-8", ".md": "text/plain; charset=utf-8"
+};
+function contentType(file: string): string {
+  return CONTENT_TYPES[path.extname(file).toLowerCase()] ?? "text/plain; charset=utf-8";
 }
 
 function asText(value: unknown): string {
