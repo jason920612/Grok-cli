@@ -134,7 +134,10 @@ export class Orchestrator {
           sendDmTool(s)
         ]
       });
-      const report = await loop.run(task, true, signal);
+      // oneShot:false — the orchestrator's report IS the user-facing answer, so
+      // it must stay clean (no machine-readable [Actions completed]/[Final checks]
+      // tail). Workers keep oneShot:true since their output is internal.
+      const report = await loop.run(task, false, signal);
       let diff = "";
       if (this.setupDone) {
         diff = this.git.integrationDiff();
