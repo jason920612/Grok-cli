@@ -210,6 +210,16 @@ test("read-only tool calls are batched and executed together in one turn", async
   assert.deepEqual(toolCalls.map((c) => c.args.path).sort(), ["a.ts", "b.ts"]);
 });
 
+test("TodoGate nudges to finish open plan steps before letting the turn end", async () => {
+  const { loop, requests } = makeLoop({
+    responses: [responseWithText("r1", "All done."), responseWithText("r2", "All done."), responseWithText("r3", "All done.")],
+    contextItems: [{ id: "active-plan", type: "plan", pinned: true, content: "Plan:\n[x] design\n[~] build\n[ ] test" }]
+  });
+  await loop.run("build feature", true);
+  const joined = requests.map(allInput).join("\n");
+  assert.match(joined, /still has 2 step\(s\) pending or in_progress/);
+});
+
 test("a huge tool result is capped (head+tail) before entering the transcript", async () => {
   const big = "X".repeat(120000);
   const { loop, requests } = makeLoop({

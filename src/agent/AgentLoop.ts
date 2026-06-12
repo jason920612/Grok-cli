@@ -8,6 +8,7 @@ import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import type { ToolExecutionContext } from "../tools/AgentTool.js";
 import { TOOL_EFFECTS } from "../tools/toolEffects.js";
 import { readTextFile } from "../workspace/FileSystem.js";
+import { DoomLoopDetector } from "./DoomLoopDetector.js";
 import type { SkillLoader } from "../skills/SkillLoader.js";
 import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import type { ContextItem } from "../context/ContextItem.js";
@@ -42,7 +43,9 @@ const ELIDABLE_RESULTS = new Set<string>([
 ]);
 
 const HANDOFF_SYSTEM =
-  "You compress an in-progress coding agent's transcript into a handoff brief for another agent that will resume the SAME task. Be concise and concrete. Do not solve the task — only summarize state.";
+  "You produce a faithful handoff summary of an in-progress coding agent's conversation so a successor can resume the SAME task seamlessly after the earlier turns are discarded. " +
+  "Optimize for COMPLETENESS and precision over brevity — it is far worse to drop a critical detail than to be verbose. " +
+  "If the conversation already contains a prior handoff summary, treat it as authoritative for the early history and carry its still-relevant information forward so nothing is lost across successive compactions. Do not solve the task — only summarize state.";
 
 /**
  * AgentLoop (§7) — pure-stateless orchestrator. No conversation-chain modes;
@@ -53,6 +56,8 @@ export class AgentLoop {
   private readonly verifier?: VerifierAgent;
   /** This agent's own cumulative token usage, surfaced per-call so each agent's progress is visible. */
   private readonly ownUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, calls: 0 };
+  /** Detects the model thrashing on the same operation/cycle (grok-build doom-loop). */
+  private readonly doomLoop = new DoomLoopDetector();
   private readonly emptyGuard = new EmptyResponseGuard();
   private readonly planOnlyGuard = new PlanOnlyGuard();
   private readonly multiToolGuard = new MultiToolGuard();
@@ -91,6 +96,7 @@ export class AgentLoop {
     let lastVerifierVerdict: VerifierVerdict | undefined;
     let finalText = "";
     let noProgressStreak = 0;
+    let todoGateNudges = 0;
 
     // Codex-style transcript: stable system preamble + task, then accumulating
     // assistant / tool_call / tool-result turns. Sent in full each step (no
@@ -120,6 +126,7 @@ export class AgentLoop {
         messages.push({ role: "user", content: `<User interjection (mid-task)>\n${note}\n</User interjection>` });
         this.events.emit({ type: "info", message: `↪ picked up your message: "${note}"` });
       }
+      this.repairTranscript(messages);
       this.compactTranscript(messages);
       // When the transcript is still large after mechanical eliding (lots of
       // state/mutation turns that elision can't touch), summarize the old part
@@ -207,6 +214,24 @@ export class AgentLoop {
           }
         }
 
+        // TodoGate (grok-build): don't let the turn end while the plan still has
+        // open steps. Nudge the model to finish them; fall through after a couple
+        // of tries so it can't be trapped forever.
+        const plan = this.context.list().find((i) => i.type === "plan" && i.pinned);
+        const openSteps = plan ? (plan.content.match(/\[ \]|\[~\]/g) || []).length : 0;
+        if (openSteps > 0 && todoGateNudges < 2) {
+          todoGateNudges++;
+          if (response.text) messages.push({ role: "assistant", content: response.text });
+          messages.push({
+            role: "user",
+            content:
+              `Your plan still has ${openSteps} step(s) pending or in_progress, but you are ending the turn. ` +
+              "Advance the remaining steps now — do the work, then mark them completed with update_plan. " +
+              "If a step is genuinely already done, update the plan to reflect that. If the task truly cannot proceed, state why."
+          });
+          continue;
+        }
+
         finalText = response.text;
         break;
       }
@@ -280,6 +305,19 @@ export class AgentLoop {
             "If the task is already answerable, give the final answer. Do not repeat reads or searches whose results are already above."
         });
         noProgressStreak = 0;
+      }
+
+      // Doom-loop guard: warn once, then terminate the turn if the model keeps
+      // repeating the same operation/cycle (ported from grok-build's detector).
+      const loopSig = calls.map((c) => `${c.name}:${(c.argsJson || "").replace(/\s+/g, "").slice(0, 200)}`).join("|");
+      const verdict = this.doomLoop.record(loopSig);
+      if (verdict.action === "warn") {
+        messages.push({ role: "user", content: DoomLoopDetector.corrective(verdict.count) });
+        this.events.emit({ type: "warn", message: `Doom-loop warning: same operation repeated ${verdict.count}×` });
+      } else if (verdict.action === "terminate") {
+        this.events.emit({ type: "warn", message: `Doom-loop: turn terminated after ${verdict.count} repeats of the same operation` });
+        finalText = finalText || "Stopped: I was repeating the same operation without making progress. Please re-scope the task or give more guidance.";
+        break;
       }
     }
 
@@ -361,6 +399,30 @@ export class AgentLoop {
    * OLDEST tool-result turns (keeping system, task, and the most recent turns),
    * so the model retains recent observations while old bulk is dropped.
    */
+  /**
+   * Conversation repair (grok-build): keep the tool_call ↔ tool_result pairing
+   * valid before each send. Drop orphan/duplicate tool results, and give any
+   * dangling tool_call (e.g. after an interrupt) a synthetic result — a
+   * function_call with no output is an API error.
+   */
+  private repairTranscript(messages: ModelMessage[]): void {
+    const callIds = new Set<string>();
+    for (const m of messages) if (m.role === "tool_call") callIds.add(m.toolCallId);
+    const haveResult = new Set<string>();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role !== "tool") continue;
+      if (!callIds.has(m.toolCallId) || haveResult.has(m.toolCallId)) messages.splice(i, 1); // orphan or duplicate
+      else haveResult.add(m.toolCallId);
+    }
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      if (m.role !== "tool_call" || haveResult.has(m.toolCallId)) continue;
+      messages.splice(i + 1, 0, { role: "tool", toolCallId: m.toolCallId, content: JSON.stringify({ ok: false, error: { code: "no_result", message: "(no result recorded — the call was interrupted)" } }) });
+      haveResult.add(m.toolCallId);
+    }
+  }
+
   private compactTranscript(messages: ModelMessage[]): void {
     const budget = TUNING.budget.maxInputTokens - TUNING.budget.reservedForOutput;
     const keepRecent = 10;
