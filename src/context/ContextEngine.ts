@@ -295,6 +295,24 @@ export class ContextEngine {
     const norm = normalizePath(path);
     return this.reads.filter((r) => r.path === norm);
   }
+
+  /**
+   * Distinct file paths the agent has read, most-recently-read first. Used after
+   * a compaction to re-hydrate the few key files the model was working with, so
+   * it keeps concrete context instead of only a prose summary (Codex re-reads
+   * recently edited files after compacting).
+   */
+  recentReadPaths(limit: number): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (let i = this.reads.length - 1; i >= 0 && out.length < limit; i--) {
+      const p = this.reads[i].path;
+      if (seen.has(p)) continue;
+      seen.add(p);
+      out.push(p);
+    }
+    return out;
+  }
 }
 
 function subtractRanges(target: LineRange, covers: LineRange[]): LineRange[] {

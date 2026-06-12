@@ -7,6 +7,7 @@ import type { ContextManager } from "../context/ContextManager.js";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import type { ToolExecutionContext } from "../tools/AgentTool.js";
 import { TOOL_EFFECTS } from "../tools/toolEffects.js";
+import { readTextFile } from "../workspace/FileSystem.js";
 import type { SkillLoader } from "../skills/SkillLoader.js";
 import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import type { ContextItem } from "../context/ContextItem.js";
@@ -39,6 +40,9 @@ const ELIDABLE_RESULTS = new Set<string>([
   "list_files",
   "read_background_output"
 ]);
+
+const HANDOFF_SYSTEM =
+  "You compress an in-progress coding agent's transcript into a handoff brief for another agent that will resume the SAME task. Be concise and concrete. Do not solve the task — only summarize state.";
 
 /**
  * AgentLoop (§7) — pure-stateless orchestrator. No conversation-chain modes;
@@ -117,6 +121,10 @@ export class AgentLoop {
         this.events.emit({ type: "info", message: `↪ picked up your message: "${note}"` });
       }
       this.compactTranscript(messages);
+      // When the transcript is still large after mechanical eliding (lots of
+      // state/mutation turns that elision can't touch), summarize the old part
+      // into a handoff brief and re-hydrate the key files (Codex-style).
+      await this.maybeCompactTranscript(messages, task);
 
       // No live spinner when (a) labeled multi-agent — concurrent workers would
       // corrupt each other's spinner on one TTY — or (b) an interjection channel
@@ -413,6 +421,96 @@ export class AgentLoop {
     }
     if (tc) return `[elided to save context — earlier ${tc.name} result (${chars} chars); re-run ${tc.name} if you still need it]`;
     return `[elided to save context — ${chars} chars]`;
+  }
+
+  /**
+   * Codex-style auto-compaction. When the transcript is still over the compact
+   * threshold after mechanical eliding, ask the model for a handoff summary of
+   * the OLD turns, replace them with that summary, re-hydrate the few key files
+   * the agent was working with, and carry the current plan forward (so plan
+   * state survives compaction — the grok-build "reseed" principle). The recent
+   * window is kept verbatim. Best-effort: any failure leaves the transcript
+   * untouched rather than crashing the run.
+   */
+  private async maybeCompactTranscript(messages: ModelMessage[], task: string): Promise<void> {
+    const budget = TUNING.budget.maxInputTokens - TUNING.budget.reservedForOutput;
+    const threshold = Math.floor(budget * TUNING.compact.atFraction);
+    const cpt = TUNING.token.charsPerToken;
+    const textOf = (m: ModelMessage): string => ("content" in m ? m.content : `${m.name} ${m.argsJson}`);
+    const total = messages.reduce((s, m) => s + Math.ceil(textOf(m).length / cpt), 0);
+    if (total <= threshold) return;
+
+    // Walk back from the end to find where the verbatim "recent window" starts.
+    let acc = 0;
+    let recentStart = messages.length;
+    for (let i = messages.length - 1; i >= 2; i--) {
+      acc += textOf(messages[i]).length;
+      recentStart = i;
+      if (acc >= TUNING.compact.keepRecentChars) break;
+    }
+    if (recentStart <= 2) return; // nothing old enough to compact
+
+    const oldMessages = messages.slice(2, recentStart);
+    const serialize = (m: ModelMessage): string =>
+      m.role === "tool_call" ? `[tool_call ${m.name}] ${m.argsJson}` : m.role === "tool" ? `[tool_result] ${m.content}` : `[${m.role}] ${m.content}`;
+    const oldText = oldMessages.map(serialize).join("\n");
+
+    let summary: string;
+    try {
+      const resp = await this.provider.complete({
+        messages: [
+          { role: "system", content: HANDOFF_SYSTEM },
+          {
+            role: "user",
+            content:
+              `<Task>\n${task}\n</Task>\n\n<Conversation so far>\n${oldText}\n</Conversation so far>\n\n` +
+              "Write a handoff summary so another agent can resume WITHOUT re-reading the above. Concisely include: " +
+              "1) progress and key decisions; 2) important context, constraints, user preferences; 3) what remains (clear next steps); " +
+              "4) critical specifics to continue — file paths, identifiers, commands, data, open issues/PRs. Return only the summary."
+          }
+        ],
+        tools: [],
+        toolChoice: "none",
+        parallelToolCalls: false
+      });
+      this.usage?.record(resp.usage);
+      summary = (resp.text ?? "").trim();
+      if (!summary) return;
+    } catch {
+      return; // keep the full transcript if summarization fails
+    }
+
+    // ② Re-hydrate the key files (read directly, bypassing the duplicate-read
+    // guard, so the model keeps concrete context — not just prose).
+    const fileMsgs: ModelMessage[] = [];
+    for (const p of this.toolCtx.engine?.recentReadPaths(TUNING.compact.rehydrateFiles) ?? []) {
+      try {
+        const content = await readTextFile(this.toolCtx.sandbox, p);
+        const head = content.split(/\r?\n/).slice(0, TUNING.compact.rehydrateLines).join("\n");
+        fileMsgs.push({ role: "user", content: `<Re-hydrated key file ${p} (first ${TUNING.compact.rehydrateLines} lines)>\n${head}\n</Re-hydrated key file>` });
+      } catch {
+        /* file may have been moved/deleted — skip it */
+      }
+    }
+
+    // Carry the current plan across the compaction (it survives as durable state).
+    const plan = this.context.list().find((i) => i.type === "plan" && i.pinned);
+    const planMsg: ModelMessage | null = plan
+      ? { role: "user", content: `<Current plan (carried across compaction)>\n${plan.content}\n</Current plan>` }
+      : null;
+
+    const handoff: ModelMessage = {
+      role: "user",
+      content:
+        `<Context compacted to save tokens — handoff summary of the earlier conversation>\n${summary}\n</Context compacted>\n` +
+        "The raw earlier turns were removed. Trust this summary; re-read a file or re-run a tool if you need a detail it omits."
+    };
+
+    messages.splice(2, recentStart - 2, handoff, ...fileMsgs, ...(planMsg ? [planMsg] : []));
+    this.events.emit({
+      type: "info",
+      message: chalk.dim(`↯ compacted context: summarized ${oldMessages.length} earlier turns, re-hydrated ${fileMsgs.length} file(s)`)
+    });
   }
 
   private buildBundle(task: string, claim: string, trace: string[], summaries: ToolExecutor["summaries"]): EvidenceBundle {

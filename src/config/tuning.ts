@@ -20,6 +20,17 @@ export type AgentTuning = {
     degradeAtFraction: number;
     summarizeAtFraction: number;
   };
+  /** Codex-style transcript auto-compaction (handoff summary + key-file re-hydrate). */
+  compact: {
+    /** Compact the transcript once it exceeds this fraction of the usable budget. */
+    atFraction: number;
+    /** Approx chars of the most-recent transcript to keep verbatim past the summary. */
+    keepRecentChars: number;
+    /** Number of recently-read files to re-read after a compaction. */
+    rehydrateFiles: number;
+    /** Lines per re-hydrated file. */
+    rehydrateLines: number;
+  };
   /** Per-section input budgets used by the InputBuilder allocator. */
   section: {
     system: number;
@@ -87,6 +98,12 @@ export const TUNING: AgentTuning = {
     reservedForOutput: 16_000,
     degradeAtFraction: 0.8,
     summarizeAtFraction: 0.95
+  },
+  compact: {
+    atFraction: 0.75,
+    keepRecentChars: 80_000,
+    rehydrateFiles: 2,
+    rehydrateLines: 120
   },
   section: {
     system: 4_000,

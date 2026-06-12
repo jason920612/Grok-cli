@@ -122,3 +122,13 @@ test("expired non-pinned items are pruned at step boundary", () => {
   engine.nextStep(); // step 3 > createdStep(0)+2
   assert.ok(!engine.list().some((i) => i.id === item.id), "pruned after ttl");
 });
+
+test("recentReadPaths returns distinct paths, most-recently-read first", () => {
+  const engine = new ContextEngine();
+  engine.recordRead("a.ts", 1, 10, "aaa");
+  engine.recordRead("b.ts", 1, 10, "bbb");
+  engine.recordRead("a.ts", 11, 20, "aaa2"); // a.ts read again, more recently
+  engine.recordRead("c.ts", 1, 10, "ccc");
+  assert.deepEqual(engine.recentReadPaths(2), ["c.ts", "a.ts"]);
+  assert.deepEqual(engine.recentReadPaths(10), ["c.ts", "a.ts", "b.ts"]);
+});
