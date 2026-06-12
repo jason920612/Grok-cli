@@ -25,6 +25,22 @@ import { formatTotals, type SessionUsage } from "./SessionUsage.js";
 import type { Interjections } from "./Interjections.js";
 
 /**
+ * Tool results safe to elide from the transcript: re-fetchable READ/SEARCH
+ * output whose only value is the data itself (the model can re-run the tool to
+ * get it back). Collaboration / state / mutation results are deliberately
+ * excluded — they record what the agent DID and are its working memory.
+ */
+const ELIDABLE_RESULTS = new Set<string>([
+  "read_file_range",
+  "get_file_overview",
+  "get_related_files",
+  "search_text",
+  "search_code",
+  "list_files",
+  "read_background_output"
+]);
+
+/**
  * AgentLoop (§7) — pure-stateless orchestrator. No conversation-chain modes;
  * every step rebuilds the full input from the ContextManager and tool-action
  * trace, and the provider abstraction sends it statelessly.
@@ -350,11 +366,19 @@ export class AgentLoop {
     // growing (slow, costly) transcript. Replace it with a pointer that names how
     // to get the data back, and free the duplicate-read guard for elided reads so
     // the model can actually re-fetch it if it still needs it (never lost).
-    const LARGE = 1200; // chars (~300 tokens): only big, re-sendable blobs
+    //
+    // ONLY elide re-fetchable READ/SEARCH results. Never elide collaboration /
+    // state results (spawn_agent, open_pr, review_pr, merge_pr, comment, …): those
+    // ARE the agent's working memory of what it has done — eliding them makes the
+    // orchestrator lose the thread and flail (re-planning instead of merging).
+    const LARGE = 1500; // chars (~375 tokens): only big, re-sendable blobs
+    const isElidable = (tc: Extract<ModelMessage, { role: "tool_call" }> | undefined): boolean =>
+      tc !== undefined && ELIDABLE_RESULTS.has(tc.name);
     for (let i = 2; i < messages.length - keepRecent; i++) {
       const m = messages[i];
       if (m.role !== "tool" || m.content.length <= LARGE) continue;
       const tc = callFor(m.toolCallId);
+      if (!isElidable(tc)) continue;
       m.content = this.elisionPointer(tc, m.content.length);
       if (tc?.name === "read_file_range") {
         try {
@@ -367,15 +391,17 @@ export class AgentLoop {
     }
 
     // Safety net: if even after that the transcript is over budget, keep eliding
-    // smaller results too (oldest first), still leaving the recent window intact.
+    // more elidable results (oldest first), still leaving the recent window and
+    // all state/collaboration results intact.
     let total = messages.reduce((sum, m) => sum + sizeOf(m), 0);
     for (let i = 2; i < messages.length - keepRecent && total > budget; i++) {
       const m = messages[i];
-      if (m.role === "tool" && m.content.length > 120 && !m.content.startsWith("[elided")) {
-        const before = sizeOf(m);
-        m.content = this.elisionPointer(callFor(m.toolCallId), m.content.length);
-        total -= before - sizeOf(m);
-      }
+      if (m.role !== "tool" || m.content.length <= 120 || m.content.startsWith("[elided")) continue;
+      const tc = callFor(m.toolCallId);
+      if (!isElidable(tc)) continue;
+      const before = sizeOf(m);
+      m.content = this.elisionPointer(tc, m.content.length);
+      total -= before - sizeOf(m);
     }
   }
 
