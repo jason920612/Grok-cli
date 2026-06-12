@@ -33,6 +33,40 @@ export function spawnAgentTool(skills: ToolSkillRegistry) {
   );
 }
 
+export function exploreTool(skills: ToolSkillRegistry) {
+  return withProgress(
+    makeTool(
+      "explore",
+      "Spawn a fast READ-ONLY exploration agent to answer a codebase question (find files, search patterns, understand how something works). Cheaper and more thorough than exploring yourself. Specify thoroughness: 'quick', 'medium', or 'very thorough'. Returns its findings.",
+      schemas.object({ question: { type: "string" }, thoroughness: { type: "string" } }, ["question"]),
+      z.object({ question: z.string().min(1), thoroughness: z.enum(["quick", "medium", "very thorough"]).optional() }),
+      skills,
+      async (args, ctx) => {
+        if (!ctx.explore) throw new Error("explore is only available to the orchestrator.");
+        const { findings } = await ctx.explore(args.question, args.thoroughness);
+        return { findings };
+      }
+    )
+  );
+}
+
+export function verifyTool(skills: ToolSkillRegistry) {
+  return withProgress(
+    makeTool(
+      "verify",
+      "Spawn a READ-ONLY verifier that audits the integrated result against the user's request: a requirements checklist (Phase A) and a code review for correctness/edge-cases/error-handling and LAZINESS — stubs, placeholders, TODOs, MVP shortcuts (Phase B). Use once before your final summary. Returns a structured verdict (pass/fail + must-fix issues); if it fails, spawn a worker to fix the issues, then finish.",
+      schemas.object({ focus: { type: "string" } }, []),
+      z.object({ focus: z.string().optional() }),
+      skills,
+      async (args, ctx) => {
+        if (!ctx.verify) throw new Error("verify is only available to the orchestrator.");
+        const { verdict, pass } = await ctx.verify(args.focus);
+        return { verdict, pass };
+      }
+    )
+  );
+}
+
 export function spawnAgentsTool(skills: ToolSkillRegistry) {
   return withProgress(
     makeTool(

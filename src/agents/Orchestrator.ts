@@ -24,6 +24,8 @@ import { GitService } from "./GitService.js";
 import {
   spawnAgentTool,
   spawnAgentsTool,
+  exploreTool,
+  verifyTool,
   openIssueTool,
   assignIssueTool,
   commentTool,
@@ -39,7 +41,7 @@ You have NO file-editing or shell tools (no apply_patch, no run_python) — you 
 If the task is just a QUESTION or analysis that needs NO file changes, answer it DIRECTLY using your read tools (read_file_range, search_text, get_file_overview, git_status/diff) — do NOT open issues or spawn workers for that.
 For any task that CHANGES files, you delegate. Process:
 1. SCOPE FIRST — if the request is OPEN or under-specified (multiple reasonable interpretations, unstated goal/data source/scope/look-and-feel), call ask_user ONCE up front to clarify at the CONCEPT level (end goal, key priorities, hard constraints) — batch all questions into that single call, ask the "what" not the "how". Do this BEFORE planning or spawning anyone. Skip it only when the task is genuinely clear; when you do skip, state your key assumptions. Never spawn workers to build the wrong thing because you didn't ask.
-2. PLAN — call update_plan with the decomposition. Workers each run in an ISOLATED git worktree branched from the same base; their branches are merged back with a normal 3-way git merge. So decompose along boundaries that MERGE CLEANLY:
+2. PLAN — first UNDERSTAND, then decompose. When the codebase is unfamiliar or the task needs research, call explore (a cheap read-only agent; pass thoroughness quick/medium/very thorough) to map the relevant files/patterns instead of doing deep exploration yourself. Then call update_plan with the decomposition. Workers each run in an ISOLATED git worktree branched from the same base; their branches are merged back with a normal 3-way git merge. So decompose along boundaries that MERGE CLEANLY:
    - Separate FILES / features / independent modules → always safe to parallelize.
    - A BRAND-NEW file built from scratch → must be ONE worker. Two workers each creating the same new path collide as an unmergeable add/add conflict (no common ancestor). E.g. a fresh single-page index.html dashboard is ONE worker that builds it end-to-end (structure + styling + logic together) — do NOT split it into HTML/CSS/JS workers.
    - An EXISTING file → you MAY split different, well-SEPARATED regions across parallel workers (git auto-merges non-overlapping hunks). But keep the regions far apart (edits within a few lines of each other still conflict), and remember the pieces may be semantically coupled — only do this when the regions are genuinely independent. If in doubt, give the whole file to one worker.
@@ -49,8 +51,8 @@ Split a genuinely multi-FILE / multi-feature task into several workers (don't ha
 Brief workers like SENIOR ENGINEERS, not junior helpers: explain WHAT you need and WHY (the context), share what you already know (file paths, function names, decisions, the shared contract), describe the END STATE rather than dictating step-by-step commands (trust their judgment on HOW), and include clear ACCEPTANCE CRITERIA — what does "done" look like (including how to verify). Spawn early and liberally; do NOT do deep exploration or edits yourself when a worker would do it better. Don't wait for one worker before spawning others that don't depend on it.
 4. Review and integrate: read each worker's PR (and its stated verification) and git_diff. HOLD THE QUALITY BAR: if the PR ships stubs/placeholders/TODOs/MVP shortcuts, skipped verification, or ignores the existing architecture, request_changes and send it back — do NOT merge half-done or corner-cut work. Otherwise review_pr (approve) and merge_pr. On a merge conflict, the merge is aborted and conflicts reported — reassign or serialize the conflicting work.
 5. Maintain the issues as your plan. Do NOT give a final answer while issues remain open.
-6. VERIFY responsibly but DO NOT LOOP: each worker is responsible for verifying its OWN sub-task before opening its PR (its brief says so). Trust that verification. After merging, you may do AT MOST ONE quick integrated sanity check — and prefer CHEAP signals: git_status / git_diff stat / a small targeted read. Do NOT read entire large merged files into your context (it bloats every following step for no benefit), do NOT re-read merged files repeatedly, and do NOT spawn extra "polish"/"final"/"verification" workers in a loop — once the planned sub-tasks are merged, you are done.
-7. When all planned work is integrated, give a concise final summary of what was done and how it was checked. Finish promptly.
+6. VERIFY before sign-off — but exactly ONCE, no loop: each worker verifies its OWN sub-task before its PR (trust that). Once all sub-tasks are merged, call verify ONCE — a read-only audit of the integrated result against the user's request (requirements checklist + code review for correctness, edge cases, error handling, and LAZINESS: stubs/placeholders/TODOs/MVP shortcuts). If it returns fail, spawn ONE worker to fix the listed must-fix issues, then finish. Do NOT call verify repeatedly, do NOT read entire large merged files into your own context, and do NOT spawn endless "polish" workers.
+7. When the work is integrated and verify passes (or its issues are fixed), give a concise final summary of what was done and how it was checked. Finish promptly.
 Keep the team small and focused. Record durable project insight with remember when you learn the user's intent or a key assumption.`;
 
 const WORKER_BASE = (name: string) => `You are worker sub-agent "${name}". Work ONLY on your assigned task (see the Collaboration Board for your issue and brief).
@@ -61,6 +63,21 @@ VERIFY before you finish: actually exercise what you built with run_python — r
 Discuss on the board (comment) if blocked or you need clarification; @mention the orchestrator.
 You have a TIGHT step budget (~30 steps) — your sub-task should be small enough to finish well within it. If you discover it is larger than expected, do the core piece, open a PR for that, and note clearly in the PR body what remains so the orchestrator can spawn follow-up workers. Do not try to do everything yourself.
 When your task is complete AND verified, call open_pr with a clear summary that states what you verified and links your issue. That is your completion signal.`;
+
+const EXPLORE_ROLE = (thoroughness: string) => `You are a fast, READ-ONLY codebase exploration agent. You have NO editing tools.
+Answer the orchestrator's question by searching and reading. Adapt to the requested thoroughness "${thoroughness}":
+- "quick": 1-3 targeted searches/reads, return the first solid findings.
+- "medium": explore 5-10 files, try alternate naming conventions.
+- "very thorough": exhaustive search across multiple directories, naming patterns, and related files.
+Start broad (search_text / get_file_overview / list_files), then narrow to precise read_file_range. Issue independent reads/searches together in one turn (they run in parallel). Stay inside the workspace; if something isn't found, report that rather than broadening scope.
+Return a concise findings report with ABSOLUTE file paths and the relevant code snippets / file:line references the orchestrator needs. Do not speculate beyond what you read.`;
+
+const VERIFIER_ROLE = `You are a meticulous, READ-ONLY verifier. You did NOT write this code. You have NO editing tools.
+Determine whether the integrated result correctly and COMPLETELY satisfies the user's request. Use git_diff / read_file_range / search_text to inspect the actual changes.
+Two phases:
+- PHASE A — Requirements: restate the user's request as a concrete checklist of deliverables/success criteria (include follow-ups and corrections), and check each off against what was actually done.
+- PHASE B — Code review (when code changed): check correctness first, then edge cases, error handling, unhandled failure modes, and — critically — LAZINESS: stubs, placeholders, TODOs, "rest unchanged" elisions, mock/hardcoded stand-ins, or scope quietly narrowed to an MVP. Cite file:line for every issue.
+End with exactly one line "VERDICT: pass" or "VERDICT: fail", then a short numbered list of concrete must-fix issues (empty if pass). Do not fix anything yourself.`;
 
 export type OrchestratorResult = { report: string; integrationBranch: string; diff: string; ephemeral: boolean; applied: boolean };
 
@@ -79,6 +96,7 @@ export class Orchestrator {
   private spawnCount = 0;
   private setupDone = false;
   private runSignal?: AbortSignal;
+  private currentTask = "";
 
   private readonly applyToWorkingTree: boolean;
   private readonly usage?: SessionUsage;
@@ -127,6 +145,7 @@ export class Orchestrator {
   }
 
   async run(task: string, signal?: AbortSignal): Promise<OrchestratorResult> {
+    this.currentTask = task;
     // Remember the run's signal so spawned workers receive it too — otherwise an
     // interrupt (web Stop / Esc) aborts only the orchestrator while workers grind on.
     this.runSignal = signal;
@@ -147,6 +166,8 @@ export class Orchestrator {
         extraTools: (s) => [
           spawnAgentTool(s),
           spawnAgentsTool(s),
+          exploreTool(s),
+          verifyTool(s),
           openIssueTool(s),
           assignIssueTool(s),
           commentTool(s),
@@ -231,11 +252,43 @@ export class Orchestrator {
     return { prNumber: pr?.number, summary };
   };
 
+  /** Run a pure read-only helper agent (explore / verify) and return its text. Never throws. */
+  private async runReadOnlyAgent(name: string, role: string, brief: string): Promise<string> {
+    const loop = this.buildLoop({
+      root: this.config.workspaceRoot,
+      agentId: name,
+      role,
+      isOrchestrator: false,
+      readOnly: true,
+      extraTools: () => []
+    });
+    try {
+      return await loop.run(brief, true, this.runSignal);
+    } catch (error) {
+      return `(${name} could not complete: ${error instanceof Error ? error.message : String(error)})`;
+    }
+  }
+
+  /** Spawn a read-only explore agent for cheap context gathering (orchestrator only). */
+  private readonly explore = async (question: string, thoroughness = "medium"): Promise<{ findings: string }> => {
+    const findings = await this.runReadOnlyAgent("explore", EXPLORE_ROLE(thoroughness), `Exploration request: ${question}`);
+    return { findings };
+  };
+
+  /** Spawn a read-only verifier to audit the integrated result against the task (orchestrator only). */
+  private readonly verify = async (focus?: string): Promise<{ verdict: string; pass: boolean }> => {
+    const brief = `User's request:\n${this.currentTask}\n\n${focus ? `Focus especially on: ${focus}\n\n` : ""}Verify the integrated result now.`;
+    const verdict = await this.runReadOnlyAgent("verifier", VERIFIER_ROLE, brief);
+    return { verdict, pass: /VERDICT:\s*pass/i.test(verdict) };
+  };
+
   private buildLoop(opts: {
     root: string;
     agentId: string;
     role: string;
     isOrchestrator: boolean;
+    /** Pure read-only helper (explore / verify): only inspection tools, tight budget, no worktree/PR. */
+    readOnly?: boolean;
     extraTools: (skills: ToolSkillRegistry) => AgentTool[];
   }): AgentLoop {
     const sandbox = new WorkspaceSandbox(opts.root, this.config.sandboxProfile, this.config.workspaceTrusted);
@@ -245,9 +298,11 @@ export class Orchestrator {
     // The orchestrator plans and delegates — it must not change the repo or run
     // shell commands itself, so workers are the only agents that touch files.
     // Strip every workspace-mutating / shell tool from its registry (derived
-    // from TOOL_EFFECTS so new tools are classified automatically).
+    // from TOOL_EFFECTS so new tools are classified automatically). Read-only
+    // helpers are tighter still: pure inspection tools only.
     const mutating = (name: string) => TOOL_EFFECTS[name]?.modifiesWorkspace || TOOL_EFFECTS[name]?.isShell;
-    const allowed = opts.isOrchestrator ? (n: string) => !mutating(n) : () => true;
+    const pureRead = (name: string) => TOOL_EFFECTS[name]?.readOnly === true;
+    const allowed = opts.readOnly ? pureRead : opts.isOrchestrator ? (n: string) => !mutating(n) : () => true;
     const allowedNames = LOCAL_TOOL_NAMES.filter(allowed);
     const toolSkills = new ToolSkillRegistry(opts.root);
     toolSkills.loadBuiltin(allowedNames);
@@ -283,6 +338,8 @@ export class Orchestrator {
       git: this.git,
       agentId: opts.agentId,
       spawnWorker: opts.isOrchestrator ? this.spawnWorker : undefined,
+      explore: opts.isOrchestrator ? this.explore : undefined,
+      verify: opts.isOrchestrator ? this.verify : undefined,
       // Only the orchestrator faces the user, so only it can ask scoping questions.
       askUser: opts.isOrchestrator ? this.askUser : undefined,
       images: []
@@ -294,7 +351,7 @@ export class Orchestrator {
     const config: GrokCodeConfig = {
       ...this.config,
       workspaceRoot: opts.root,
-      maxSteps: opts.isOrchestrator ? this.config.maxSteps : Math.min(this.config.maxSteps, 30)
+      maxSteps: opts.isOrchestrator ? this.config.maxSteps : Math.min(this.config.maxSteps, opts.readOnly ? 14 : 30)
     };
     const events = this.eventSinkFactory(opts.agentId, !opts.isOrchestrator);
     const interjections = opts.isOrchestrator ? this.interjections : undefined;

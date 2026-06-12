@@ -39,6 +39,10 @@ export type ToolExecutionContext = {
   agentId?: string;
   /** Run a worker sub-agent (orchestrator only). */
   spawnWorker?: SpawnWorker;
+  /** Spawn a read-only explore agent for cheap context gathering (orchestrator only). */
+  explore?: (question: string, thoroughness?: string) => Promise<{ findings: string }>;
+  /** Spawn a read-only verifier to audit the integrated result against the task (orchestrator only). */
+  verify?: (focus?: string) => Promise<{ verdict: string; pass: boolean }>;
   /** Mailbox for images a tool wants the model to SEE; the loop attaches them to the next turn. */
   images?: Array<{ dataUri: string; note?: string }>;
 };

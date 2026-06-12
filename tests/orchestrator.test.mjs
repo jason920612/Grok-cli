@@ -249,3 +249,27 @@ test("orchestrator runs two workers in parallel on disjoint files and merges bot
   assert.match(a, /AAA/);
   assert.match(b, /BBB/);
 });
+
+test("orchestrator can run a read-only verify pass and read its verdict", async () => {
+  const root = gitRepo();
+  const provider = scriptedProvider([
+    fnCall("verify", { focus: "correctness" }), // orchestrator asks the verifier
+    text("Reviewed the integrated result. VERDICT: pass"), // the read-only verifier's report
+    text("Verified — everything checks out, done.") // orchestrator's final summary
+  ]);
+  const orch = new Orchestrator(provider, config(root), "verify-run", "Do the thing.");
+  const result = await orch.run("Do the thing.");
+  assert.match(result.report, /everything checks out/i);
+});
+
+test("orchestrator can spawn a read-only explore agent for context", async () => {
+  const root = gitRepo();
+  const provider = scriptedProvider([
+    fnCall("explore", { question: "where is auth handled?", thoroughness: "quick" }),
+    text("auth.js:12 handles login via verifyToken()."), // explore agent's findings
+    text("Explored; auth lives in auth.js. Done.")
+  ]);
+  const orch = new Orchestrator(provider, config(root), "explore-run", "Investigate auth.");
+  const result = await orch.run("Investigate auth.");
+  assert.match(result.report, /auth lives in auth\.js/i);
+});
