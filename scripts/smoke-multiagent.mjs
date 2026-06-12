@@ -19,7 +19,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const cliEntry = path.join(projectRoot, "dist", "index.js");
 const DEFAULT_TASK = "做一個整理美股每天主要指數價格波動的儀表板網頁";
 const task = process.argv[2] || DEFAULT_TASK;
-const TIMEOUT_MS = 20 * 60 * 1000;
+const TIMEOUT_MS = 25 * 60 * 1000;
 
 if (!fs.existsSync(cliEntry)) {
   console.error(`dist not built — run "npm run build" first (missing ${cliEntry})`);

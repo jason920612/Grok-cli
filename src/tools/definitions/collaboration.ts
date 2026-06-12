@@ -54,7 +54,7 @@ export function verifyTool(skills: ToolSkillRegistry) {
   return withProgress(
     makeTool(
       "verify",
-      "Spawn a READ-ONLY verifier that audits the integrated result against the user's request: a requirements checklist (Phase A) and a code review for correctness/edge-cases/error-handling and LAZINESS — stubs, placeholders, TODOs, MVP shortcuts (Phase B). Use once before your final summary. Returns a structured verdict (pass/fail + must-fix issues); if it fails, spawn a worker to fix the issues, then finish.",
+      "Spawn a READ-ONLY verifier that audits the integrated result against the user's request: a requirements checklist (Phase A) and a code review for correctness/edge-cases/error-handling and LAZINESS — stubs, placeholders, TODOs, MVP shortcuts (Phase B). OPTIONAL — use at most once, for a complex or risky change; skip it for simple tasks (it is not free). Returns a structured verdict (pass/fail + must-fix issues); on fail, spawn ONE narrowly-scoped fixer for the genuine must-fix issues only.",
       schemas.object({ focus: { type: "string" } }, []),
       z.object({ focus: z.string().optional() }),
       skills,
