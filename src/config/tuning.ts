@@ -61,6 +61,8 @@ export type AgentTuning = {
   /** Inline truncation limits. */
   truncate: {
     toolOutputInlineChars: number;
+    /** Hard cap on a single tool result placed in the transcript (head+tail kept, middle elided). */
+    toolOutputTranscriptChars: number;
   };
   /** Token estimation. */
   token: {
@@ -119,7 +121,8 @@ export const TUNING: AgentTuning = {
     actionNudgeAfterNoProgress: 10
   },
   truncate: {
-    toolOutputInlineChars: 4_000
+    toolOutputInlineChars: 4_000,
+    toolOutputTranscriptChars: 32_000
   },
   token: {
     charsPerToken: 4

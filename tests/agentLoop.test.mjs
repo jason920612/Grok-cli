@@ -210,6 +210,19 @@ test("read-only tool calls are batched and executed together in one turn", async
   assert.deepEqual(toolCalls.map((c) => c.args.path).sort(), ["a.ts", "b.ts"]);
 });
 
+test("a huge tool result is capped (head+tail) before entering the transcript", async () => {
+  const big = "X".repeat(120000);
+  const { loop, requests } = makeLoop({
+    responses: [responseWithTool("r1", functionCall("search_text", { query: "x" }, "c1")), responseWithText("r2", "done")],
+    execute: () => ({ ok: true, data: { hits: big }, summary: "many hits" })
+  });
+  await loop.run("search the repo", true);
+  const toolMsg = requests[1].messages.find((m) => m.role === "tool");
+  assert.ok(toolMsg, "tool result is in the transcript");
+  assert.ok(toolMsg.content.length < 40000, `capped (was ${toolMsg.content.length})`);
+  assert.match(toolMsg.content, /chars elided/);
+});
+
 test("a batch that mixes in a mutating tool is rejected and corrected", async () => {
   const { loop, requests, toolCalls } = makeLoop({
     responses: [

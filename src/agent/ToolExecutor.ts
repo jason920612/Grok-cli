@@ -168,7 +168,21 @@ export class ToolExecutor {
 }
 
 function output(callId: string, result: unknown): FunctionOutput {
-  return { type: "function_call_output", call_id: callId, output: JSON.stringify(result) };
+  return { type: "function_call_output", call_id: callId, output: capToolOutput(JSON.stringify(result)) };
+}
+
+/**
+ * Cap a single tool result before it enters the transcript. A huge output
+ * (a wide search, a noisy build log, a big shell dump) otherwise rides along in
+ * every subsequent step. Keep the head and tail — where the signal usually is —
+ * and elide the middle with a clear, countable marker (Codex-style).
+ */
+function capToolOutput(text: string): string {
+  const cap = TUNING.truncate.toolOutputTranscriptChars;
+  if (text.length <= cap) return text;
+  const half = Math.floor((cap - 80) / 2);
+  const elided = text.length - half * 2;
+  return `${text.slice(0, half)}\n…[${elided} chars elided to save context — re-run the tool with a narrower scope if you need the middle]…\n${text.slice(-half)}`;
 }
 
 function getExitCode(data: unknown): number | undefined {
