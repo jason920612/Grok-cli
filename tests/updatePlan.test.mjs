@@ -46,3 +46,15 @@ test("update_plan is a non-mutating tool (so the orchestrator keeps it)", () => 
   const e = TOOL_EFFECTS.update_plan;
   assert.ok(e && !e.modifiesWorkspace && !e.isShell, "update_plan must not be stripped from the read-only orchestrator");
 });
+
+test("re-recording an identical plan is refused (no-op spin guard)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "grok-plan-"));
+  const tool = updatePlanTool(new ToolSkillRegistry(root));
+  const ctx = { context: new ContextManager() };
+  const plan = [{ step: "a", status: "in_progress" }, { step: "b", status: "pending" }];
+  const first = await tool.execute({ plan }, ctx);
+  assert.ok(!first.unchanged, "first recording is accepted");
+  const second = await tool.execute({ plan }, ctx);
+  assert.equal(second.unchanged, true, "identical re-submit is flagged unchanged");
+  assert.match(second.note, /do NOT re-submit/i);
+});

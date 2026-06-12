@@ -36,6 +36,18 @@ export function updatePlanTool(skills: ToolSkillRegistry) {
         throw new Error(`A plan may have at most ONE step in_progress at a time (got ${inProgress}). Mark only the step you are actively working on as in_progress; the rest are pending or completed.`);
       }
       const content = renderPlan(args.plan, args.explanation);
+      // No-op guard: re-recording an IDENTICAL plan is the classic orchestrator
+      // spin (it churns update_plan instead of acting/finishing). Refuse it so the
+      // model moves on, rather than waiting for the doom-loop to terminate it.
+      const existing = ctx.context.list().find((i) => i.id === "active-plan")?.content;
+      if (existing === content) {
+        return {
+          plan: args.plan,
+          rendered: content,
+          unchanged: true,
+          note: "This plan is identical to the one you already recorded — do NOT re-submit an unchanged plan. Take the next concrete action now; if every step is completed, give your final summary instead of calling update_plan again."
+        };
+      }
       ctx.context.upsert("active-plan", { type: "plan", content, priority: 95, pinned: true });
       return { plan: args.plan, rendered: content };
     }
