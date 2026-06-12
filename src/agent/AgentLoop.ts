@@ -78,8 +78,10 @@ export class AgentLoop {
     // has to re-read what it already observed.
     const system = buildSystemPreamble({
       toolIndex: this.toolSkills.toolIndex(),
-      generalSkills: this.skillLoader.select(task),
-      toolSkills: this.toolSkills.select(task, []),
+      // Keep the (cached) preamble lean: the tool index already lists every tool
+      // tersely, so include only the few most-relevant full skills, not the max.
+      generalSkills: this.skillLoader.select(task, 3),
+      toolSkills: this.toolSkills.select(task, [], 4),
       projectInstructions: this.projectInstructions,
       projectMemory: this.toolCtx.memory?.toPreamble(),
       userProfile: this.toolCtx.userProfile?.toPreamble(),
