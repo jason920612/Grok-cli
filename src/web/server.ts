@@ -11,6 +11,7 @@ import { Orchestrator } from "../agents/Orchestrator.js";
 import type { ApprovalPrompter } from "../approval/ApprovalPolicy.js";
 import type { ApprovalMode } from "../config/loadConfig.js";
 import { collectWorkingTreeDiff, type FileDiff } from "../ui/diffBrowser.js";
+import { ConversationStore, type SavedConversation } from "./ConversationStore.js";
 import { formatSessionStatus } from "../ui/terminal.js";
 import { formatWorkspaceTrustStatus } from "../ui/workspaceTrust.js";
 import { formatContext } from "../ui/formatters.js";
@@ -120,15 +121,61 @@ class WebSession {
   private interjections: Interjections | null = null;
   useAgents: boolean;
   private modeBeforeAuto: ApprovalMode;
-  readonly createdAt = Date.now();
+  createdAt = Date.now();
   lastActivityAt = Date.now();
   messageCount = 0;
+  private store?: ConversationStore;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(readonly id: string, public agent: Agent, private readonly deps: SessionDeps, demoEvents?: WebEvent[]) {
+  constructor(
+    readonly id: string,
+    public agent: Agent,
+    private readonly deps: SessionDeps,
+    opts: { demoEvents?: WebEvent[]; restore?: SavedConversation; store?: ConversationStore } = {}
+  ) {
     this.useAgents = deps.multiAgentDefault;
     this.modeBeforeAuto = agent.approval.mode === "auto-all" ? "on-request" : agent.approval.mode;
-    for (const ev of demoEvents ?? []) this.buffer.push({ seq: ++this.seq, ev });
+    this.store = opts.store;
+    if (opts.restore) {
+      // Seed this live session from a persisted conversation so its full history
+      // replays to clients on connect, and new events continue its numbering.
+      const r = opts.restore;
+      this.title = r.title;
+      this.createdAt = r.createdAt;
+      this.lastActivityAt = r.lastActivityAt;
+      this.messageCount = r.messageCount;
+      this.useAgents = r.useAgents;
+      this.seq = r.seq;
+      for (const item of r.buffer) this.buffer.push(item);
+    }
+    for (const ev of opts.demoEvents ?? []) this.buffer.push({ seq: ++this.seq, ev });
     this.wire();
+  }
+
+  /** Snapshot for the on-disk store. */
+  private toSaved(): SavedConversation {
+    return {
+      id: this.id,
+      title: this.title,
+      createdAt: this.createdAt,
+      lastActivityAt: this.lastActivityAt,
+      messageCount: this.messageCount,
+      useAgents: this.useAgents,
+      model: this.agent.config.model,
+      workspace: this.agent.config.workspaceRoot,
+      seq: this.seq,
+      buffer: this.buffer
+    };
+  }
+
+  /** Persist (debounced) — auto-save on every change; survives restart until deleted. */
+  private schedulePersist(): void {
+    if (!this.store || this.deps.demoMode) return;
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      this.store?.save(this.toSaved());
+    }, 800);
   }
 
   private wire(): void {
@@ -149,6 +196,7 @@ class WebSession {
   emit(ev: WebEvent): void {
     const item = { seq: ++this.seq, ev };
     this.buffer.push(item);
+    this.schedulePersist();
     if (this.buffer.length > 4000) this.buffer.splice(0, this.buffer.length - 4000);
     const data = this.frame(item);
     for (const res of [...this.clients]) {
@@ -484,11 +532,19 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
     multiAgentDefault: opts.multiAgentDefault ?? true
   };
 
+  // Conversations auto-persist here and survive restarts until deleted. Demo
+  // mode (screenshot/test fixtures) never touches disk.
+  const store = deps.demoMode ? undefined : new ConversationStore(opts.agent.config.workspaceRoot);
+  // Previously-saved threads, loaded as data-only "archived" entries; opening one
+  // promotes it to a live session seeded with its history (see /api/sessions/activate).
+  const archived = new Map<string, SavedConversation>();
+  for (const c of store?.loadAll() ?? []) archived.set(c.id, c);
+
   const sessions = new Map<string, WebSession>();
   let counter = 0;
   const newId = () => `c${++counter}-${randomUUID().slice(0, 4)}`;
   const addSession = (agent: Agent, demoEvents?: WebEvent[]): WebSession => {
-    const session = new WebSession(newId(), agent, deps, demoEvents);
+    const session = new WebSession(newId(), agent, deps, { demoEvents, store });
     sessions.set(session.id, session);
     return session;
   };
@@ -497,6 +553,32 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
 
   const resolveSession = (url: URL): WebSession =>
     sessions.get(url.searchParams.get("session") ?? "") ?? sessions.get(activeId) ?? firstSession;
+
+  /** Merged list for the sidebar: live sessions + archived threads, newest first. */
+  const conversationList = () => {
+    const live = [...sessions.values()].map((s) => ({ ...s.summary(), archived: false }));
+    const liveIds = new Set(sessions.keys());
+    const arch = [...archived.values()]
+      .filter((c) => !liveIds.has(c.id))
+      .map((c) => ({ id: c.id, title: c.title, running: false, messageCount: c.messageCount, createdAt: c.createdAt, lastActivityAt: c.lastActivityAt, model: c.model, workspace: c.workspace, archived: true }));
+    return [...live, ...arch].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  };
+
+  /** Promote an archived thread to a live session seeded with its history. */
+  const activateConversation = async (id: string): Promise<boolean> => {
+    if (sessions.has(id)) {
+      activeId = id;
+      return true;
+    }
+    const saved = archived.get(id);
+    if (!saved || !opts.createAgent) return false;
+    const agent = await opts.createAgent();
+    const session = new WebSession(id, agent, deps, { restore: saved, store });
+    sessions.set(id, session);
+    archived.delete(id);
+    activeId = id;
+    return true;
+  };
 
   const sendJson = (res: http.ServerResponse, body: unknown, status = 200): void => {
     res.writeHead(status, { "content-type": "application/json" });
@@ -521,7 +603,7 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
     }
 
     if (req.method === "GET" && url.pathname === "/api/sessions") {
-      sendJson(res, { sessions: [...sessions.values()].map((s) => s.summary()), activeId });
+      sendJson(res, { sessions: conversationList(), activeId });
       return;
     }
 
@@ -590,7 +672,7 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
         canSwitchModel: Boolean(opts.switchModel),
         canCreateSession: Boolean(opts.createAgent),
         commands: visibleSlashCommands().map((c) => ({ name: c.name, usage: c.usage, description: c.description })),
-        sessions: [...sessions.values()].map((s) => s.summary()),
+        sessions: conversationList(),
         activeId
       });
       return;
@@ -608,19 +690,26 @@ export async function startWebServer(opts: WebServerOptions): Promise<WebServer>
       }
       if (url.pathname === "/api/sessions/activate") {
         const id = String(body?.id ?? "");
-        if (sessions.has(id)) activeId = id;
-        return sendJson(res, { ok: sessions.has(id), activeId });
+        const ok = await activateConversation(id);
+        return sendJson(res, { ok, activeId });
       }
-      if (url.pathname === "/api/sessions/close") {
+      if (url.pathname === "/api/sessions/delete" || url.pathname === "/api/sessions/close") {
+        // Permanent delete: remove the live session (if any), the archived copy,
+        // and the on-disk file. Conversations persist until this is called.
         const id = String(body?.id ?? "");
         const session = sessions.get(id);
-        if (session && sessions.size > 1) {
+        if (session) {
           session.interrupt();
           session.closeClients();
           sessions.delete(id);
-          if (activeId === id) activeId = [...sessions.keys()][0];
         }
-        return sendJson(res, { ok: Boolean(session), activeId, sessions: [...sessions.values()].map((s) => s.summary()) });
+        archived.delete(id);
+        store?.delete(id);
+        if (activeId === id) {
+          // Fall back to another live session, creating a fresh one if none remain.
+          activeId = [...sessions.keys()][0] ?? (opts.createAgent ? addSession(await opts.createAgent()).id : firstSession.id);
+        }
+        return sendJson(res, { ok: true, activeId, sessions: conversationList() });
       }
 
       const session = resolveSession(url);
