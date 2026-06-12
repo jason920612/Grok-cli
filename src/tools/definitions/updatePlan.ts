@@ -28,6 +28,13 @@ export function updatePlanTool(skills: ToolSkillRegistry) {
     }),
     skills,
     async (args, ctx) => {
+      // Enforce the Codex invariant: at most one step in_progress. A plan with
+      // several "in progress" steps is just a wish-list — reject it so the model
+      // commits to one active step at a time.
+      const inProgress = args.plan.filter((p) => p.status === "in_progress").length;
+      if (inProgress > 1) {
+        throw new Error(`A plan may have at most ONE step in_progress at a time (got ${inProgress}). Mark only the step you are actively working on as in_progress; the rest are pending or completed.`);
+      }
       const content = renderPlan(args.plan, args.explanation);
       ctx.context.upsert("active-plan", { type: "plan", content, priority: 95, pinned: true });
       return { plan: args.plan, rendered: content };

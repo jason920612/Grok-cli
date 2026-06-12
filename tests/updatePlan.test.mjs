@@ -29,6 +29,19 @@ test("update_plan pins a rendered checklist in context", async () => {
   assert.match(plan.content, /\[ \] test/);
 });
 
+test("update_plan rejects more than one in_progress step", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "grok-plan-"));
+  const tool = updatePlanTool(new ToolSkillRegistry(root));
+  const ctx = { context: new ContextManager() };
+  await assert.rejects(
+    () => tool.execute({ plan: [
+      { step: "a", status: "in_progress" },
+      { step: "b", status: "in_progress" }
+    ] }, ctx),
+    /at most ONE step in_progress/
+  );
+});
+
 test("update_plan is a non-mutating tool (so the orchestrator keeps it)", () => {
   const e = TOOL_EFFECTS.update_plan;
   assert.ok(e && !e.modifiesWorkspace && !e.isShell, "update_plan must not be stripped from the read-only orchestrator");
