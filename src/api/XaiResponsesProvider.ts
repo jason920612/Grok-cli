@@ -139,6 +139,7 @@ function toCompletionResult(raw: any): CompletionResult {
     })),
     usage: extractUsage(raw),
     warnings,
+    incomplete: raw?.status === "incomplete" || raw?.incomplete_details?.reason === "max_output_tokens",
     raw
   };
 }

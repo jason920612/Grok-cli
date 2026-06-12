@@ -50,6 +50,8 @@ export type CompletionResult = {
   usage?: CompletionUsage;
   /** Non-fatal parse anomalies surfaced for observability, not silently dropped. */
   warnings: string[];
+  /** True when the model was cut off by the output-token limit (Responses API status "incomplete"). */
+  incomplete?: boolean;
   /** Raw provider response, for diagnostics only. */
   raw: unknown;
 };

@@ -97,6 +97,7 @@ export class AgentLoop {
     let finalText = "";
     let noProgressStreak = 0;
     let todoGateNudges = 0;
+    let autoContinues = 0;
 
     // Codex-style transcript: stable system preamble + task, then accumulating
     // assistant / tool_call / tool-result turns. Sent in full each step (no
@@ -180,6 +181,15 @@ export class AgentLoop {
       if (response.text || response.toolCalls.length > 0) state.resetReprompt(this.emptyGuard.id);
 
       if (response.toolCalls.length === 0) {
+        // Auto-continue (grok-build): if the model was cut off by the output
+        // limit, resume it instead of treating the truncated text as final.
+        if (response.incomplete && autoContinues < 3) {
+          autoContinues++;
+          if (response.text) messages.push({ role: "assistant", content: response.text });
+          messages.push({ role: "user", content: "Your previous response was cut off by the output length limit. Continue exactly where you left off — do not repeat what you already wrote." });
+          this.events.emit({ type: "info", message: "↩ output truncated — auto-continuing" });
+          continue;
+        }
         const blocked = this.applyZeroToolGuards(guards, guardCtx, state, executorTrace);
         if (blocked.action === "reprompt") {
           if (response.text) messages.push({ role: "assistant", content: response.text });
