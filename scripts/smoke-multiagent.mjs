@@ -94,7 +94,16 @@ function report(code, wallSec) {
   console.log(`  workers:            ${workers.length} (${workers.join(", ") || "none"})`);
   console.log(`  parallel batches:   ${batches}`);
   console.log(`  orchestrator update_plan calls: ${updatePlans}`);
+  console.log(`  lazy-gate rejects:  ${count(/REJECTED . this patch contains lazy|REJECTED — this patch contains lazy/g)}`);
+  console.log(`  doom-loop warnings: ${count(/Doom-loop warning/g)}   terminations: ${count(/Doom-loop: turn terminated/g)}`);
+  console.log(`  todo-gate nudges:   ${count(/still has \d+ step\(s\) pending/g)}`);
+  console.log(`  auto-continues:     ${count(/output truncated . auto-continuing|auto-continuing/g)}`);
   console.log(`  wall time:          ${wallSec}s   exit: ${code}`);
+  try {
+    const logPath = path.join(os.tmpdir(), "grok-smoke-last.log");
+    fs.writeFileSync(logPath, log);
+    console.log(`  full log:           ${logPath}`);
+  } catch { /* best effort */ }
   const orch = lastUsage("orchestrator");
   for (const w of workers) {
     const u = lastUsage(w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
