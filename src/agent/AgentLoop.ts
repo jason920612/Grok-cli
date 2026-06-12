@@ -6,6 +6,7 @@ import type { GrokCodeConfig } from "../config/loadConfig.js";
 import type { ContextManager } from "../context/ContextManager.js";
 import type { ToolRegistry } from "../tools/ToolRegistry.js";
 import type { ToolExecutionContext } from "../tools/AgentTool.js";
+import { TOOL_EFFECTS } from "../tools/toolEffects.js";
 import type { SkillLoader } from "../skills/SkillLoader.js";
 import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import type { ContextItem } from "../context/ContextItem.js";
@@ -116,8 +117,10 @@ export class AgentLoop {
           messages,
           tools: this.tools.schemas(serverTools(this.config)),
           toolChoice: this.config.toolChoice,
-          // Single-tool discipline (MultiToolGuard) — tell the API not to batch.
-          parallelToolCalls: false,
+          // Allow the model to batch READ-ONLY tools in one turn (executed in
+          // parallel below) to cut round-trips; mutating/shell tools are kept to
+          // one per turn by the read-only-batch check after the response.
+          parallelToolCalls: true,
           signal
         });
       } finally {
@@ -187,18 +190,25 @@ export class AgentLoop {
         this.events.emit({ type: "model_text", message: response.text });
       }
 
-      if (response.toolCalls.length > 1) {
+      // Read-only tools are side-effect-free and safe to run together, so let the
+      // model batch them in one turn (executed in parallel) to cut round-trips.
+      // A mutating/shell tool — or a mix — must stay one per turn (order + side
+      // effects matter), so reject those batches and guide toward read-only-only.
+      const calls = response.toolCalls;
+      const allReadOnly = calls.every((c) => TOOL_EFFECTS[c.name]?.readOnly === true);
+      if (calls.length > 1 && !allReadOnly) {
         if (response.text) messages.push({ role: "assistant", content: response.text });
         messages.push({ role: "user", content: this.multiToolGuard.feedback(guardCtx) });
         continue;
       }
 
-      const call = response.toolCalls[0];
-      this.events.emit({ type: "tool_batch", step: state.step, message: formatToolBatch(state.step, [call.name]) });
+      this.events.emit({ type: "tool_batch", step: state.step, message: formatToolBatch(state.step, calls.map((c) => c.name)) });
       if (response.text) messages.push({ role: "assistant", content: response.text });
-      messages.push({ role: "tool_call", toolCallId: call.id, name: call.name, argsJson: call.argsJson });
-      const out = await executor.executeOne(call, state.step, signal);
-      messages.push({ role: "tool", toolCallId: call.id, content: out.output });
+      for (const c of calls) messages.push({ role: "tool_call", toolCallId: c.id, name: c.name, argsJson: c.argsJson });
+      const outs = calls.length === 1
+        ? [await executor.executeOne(calls[0], state.step, signal)]
+        : await Promise.all(calls.map((c) => executor.executeOne(c, state.step, signal)));
+      for (let k = 0; k < calls.length; k++) messages.push({ role: "tool", toolCallId: calls[k].id, content: outs[k].output });
 
       // A tool (view_image / screenshot) may have produced images for the model
       // to SEE — attach each as an image-bearing user message for the next turn.
@@ -209,26 +219,27 @@ export class AgentLoop {
         }
       }
 
-      // Surface files the agent looks at, so the UI can show their contents.
-      if (call.name === "read_file_range" || call.name === "get_file_overview") {
-        try {
-          const p = JSON.parse(call.argsJson)?.path;
-          if (typeof p === "string" && p) this.events.emit({ type: "file_viewed", message: `viewed ${p}`, path: p });
-        } catch {
-          /* ignore */
-        }
-      }
-
-      // Surface the maintained plan to the UI (progress panel) when it changes.
-      if (call.name === "update_plan") {
-        try {
-          const parsed = JSON.parse(call.argsJson);
-          if (Array.isArray(parsed?.plan)) {
-            const done = parsed.plan.filter((p: { status: string }) => p.status === "completed").length;
-            this.events.emit({ type: "plan", message: `Plan ${done}/${parsed.plan.length} done`, steps: parsed.plan });
+      for (const call of calls) {
+        // Surface files the agent looks at, so the UI can show their contents.
+        if (call.name === "read_file_range" || call.name === "get_file_overview") {
+          try {
+            const p = JSON.parse(call.argsJson)?.path;
+            if (typeof p === "string" && p) this.events.emit({ type: "file_viewed", message: `viewed ${p}`, path: p });
+          } catch {
+            /* ignore */
           }
-        } catch {
-          /* ignore malformed plan args */
+        }
+        // Surface the maintained plan to the UI (progress panel) when it changes.
+        if (call.name === "update_plan") {
+          try {
+            const parsed = JSON.parse(call.argsJson);
+            if (Array.isArray(parsed?.plan)) {
+              const done = parsed.plan.filter((p: { status: string }) => p.status === "completed").length;
+              this.events.emit({ type: "plan", message: `Plan ${done}/${parsed.plan.length} done`, steps: parsed.plan });
+            }
+          } catch {
+            /* ignore malformed plan args */
+          }
         }
       }
 

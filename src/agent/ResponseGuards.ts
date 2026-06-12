@@ -61,8 +61,10 @@ export class MultiToolGuard implements ResponseGuard {
   }
   feedback(ctx: GuardContext): string {
     return (
-      `Invalid response: requested ${ctx.toolCallCount} tool calls in one turn. ` +
-      "Continue by requesting exactly one tool call, or provide a final answer if the task is complete."
+      `Invalid response: requested ${ctx.toolCallCount} tool calls in one turn that include a mutating or shell tool. ` +
+      "You MAY batch several READ-ONLY tools together in one turn (e.g. read_file_range, search_text, get_file_overview, list_files) — they run in parallel. " +
+      "But run each mutating or shell tool (apply_patch, run_python, update_plan, …) in its OWN turn. " +
+      "Retry with either a single tool, or a batch containing only read-only tools."
     );
   }
   terminalMessage(): string {

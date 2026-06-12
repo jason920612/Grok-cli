@@ -197,18 +197,29 @@ test("repeated failure guard records malformed tool arguments", async () => {
   assert.match(output, /repeated_failure_blocked/);
 });
 
-test("multiple tool calls are rejected and corrected before execution", async () => {
-  const { loop, requests, toolCalls } = makeLoop({
+test("read-only tool calls are batched and executed together in one turn", async () => {
+  const { loop, toolCalls } = makeLoop({
     responses: [
       responseWithTools("r1", [functionCall("read_file_range", { path: "a.ts" }, "c1"), functionCall("read_file_range", { path: "b.ts" }, "c2")]),
       responseWithText("r2", "done")
     ],
-    isReadOnly: (n) => n === "read_file_range"
+    execute: (n, a) => ({ ok: true, data: {}, summary: `${n} ${a.path}` })
   });
   await loop.run("inspect files", true);
-  assert.equal(toolCalls.length, 0);
-  assert.match(allInput(requests[1]), /Invalid response: requested 2 tool calls/);
-  assert.match(allInput(requests[1]), /exactly one tool call/);
+  assert.equal(toolCalls.length, 2, "both read-only calls executed (not rejected)");
+  assert.deepEqual(toolCalls.map((c) => c.args.path).sort(), ["a.ts", "b.ts"]);
+});
+
+test("a batch that mixes in a mutating tool is rejected and corrected", async () => {
+  const { loop, requests, toolCalls } = makeLoop({
+    responses: [
+      responseWithTools("r1", [functionCall("read_file_range", { path: "a.ts" }, "c1"), functionCall("apply_patch", { patch: "x" }, "c2")]),
+      responseWithText("r2", "done")
+    ]
+  });
+  await loop.run("inspect and edit", true);
+  assert.equal(toolCalls.length, 0, "a batch containing a mutating tool is not executed");
+  assert.match(allInput(requests[1]), /read-only tools/i);
 });
 
 test("repeated identical successful read-only call is blocked (no-progress)", async () => {
