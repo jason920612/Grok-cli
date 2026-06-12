@@ -61,6 +61,24 @@ test("the same range is re-sent after the file changes (read records invalidated
   assert.equal(after.content, "ALPHA\nbravo");
 });
 
+test("eliding a read (staleRead) re-enables the model to re-fetch it", async () => {
+  const root = makeWorkspace();
+  fs.writeFileSync(path.join(root, "a.txt"), "alpha\nbravo\ncharlie\n");
+  const ctx = makeContext(root);
+  const read = readFileRangeTool(new ToolSkillRegistry(root));
+
+  await read.execute({ path: "a.txt", startLine: 1, endLine: 3 }, ctx);
+  const dup = await read.execute({ path: "a.txt", startLine: 1, endLine: 3 }, ctx);
+  assert.equal(dup.unchanged, true, "duplicate is refused while the content is still in context");
+
+  // Simulate the transcript eliding that read result to save context.
+  ctx.engine.staleRead("a.txt", 1, 3);
+
+  const refetch = await read.execute({ path: "a.txt", startLine: 1, endLine: 3 }, ctx);
+  assert.ok(!refetch.unchanged, "after elision the same range is served again");
+  assert.equal(refetch.content, "alpha\nbravo\ncharlie", "the model gets the data back");
+});
+
 test("a different range is never blocked by a prior read", async () => {
   const root = makeWorkspace();
   fs.writeFileSync(path.join(root, "a.txt"), Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n") + "\n");

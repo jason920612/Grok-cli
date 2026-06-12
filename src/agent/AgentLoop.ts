@@ -329,16 +329,51 @@ export class AgentLoop {
     const keepRecent = 10;
     const sizeOf = (m: ModelMessage): number =>
       Math.ceil(("content" in m ? m.content : `${m.name} ${m.argsJson}`).length / TUNING.token.charsPerToken);
+    const callFor = (toolCallId: string): Extract<ModelMessage, { role: "tool_call" }> | undefined =>
+      messages.find((x): x is Extract<ModelMessage, { role: "tool_call" }> => x.role === "tool_call" && x.toolCallId === toolCallId);
+
+    // Proactively elide LARGE older tool results — do NOT wait for budget pressure.
+    // A big read/search result re-sent verbatim every step is the main driver of a
+    // growing (slow, costly) transcript. Replace it with a pointer that names how
+    // to get the data back, and free the duplicate-read guard for elided reads so
+    // the model can actually re-fetch it if it still needs it (never lost).
+    const LARGE = 1200; // chars (~300 tokens): only big, re-sendable blobs
+    for (let i = 2; i < messages.length - keepRecent; i++) {
+      const m = messages[i];
+      if (m.role !== "tool" || m.content.length <= LARGE) continue;
+      const tc = callFor(m.toolCallId);
+      m.content = this.elisionPointer(tc, m.content.length);
+      if (tc?.name === "read_file_range") {
+        try {
+          const a = JSON.parse(tc.argsJson) as { path?: string; startLine?: number; endLine?: number };
+          if (a.path && a.startLine && a.endLine) this.toolCtx.engine?.staleRead(a.path, a.startLine, a.endLine);
+        } catch {
+          /* keep the pointer even if args don't parse */
+        }
+      }
+    }
+
+    // Safety net: if even after that the transcript is over budget, keep eliding
+    // smaller results too (oldest first), still leaving the recent window intact.
     let total = messages.reduce((sum, m) => sum + sizeOf(m), 0);
-    if (total <= budget) return;
     for (let i = 2; i < messages.length - keepRecent && total > budget; i++) {
       const m = messages[i];
-      if (m.role === "tool" && m.content.length > 120) {
+      if (m.role === "tool" && m.content.length > 120 && !m.content.startsWith("[elided")) {
         const before = sizeOf(m);
-        m.content = `[older tool result elided to save context — ${m.content.length} chars]`;
+        m.content = this.elisionPointer(callFor(m.toolCallId), m.content.length);
         total -= before - sizeOf(m);
       }
     }
+  }
+
+  /** A short stand-in that tells the model the data is gone but how to get it back. */
+  private elisionPointer(tc: Extract<ModelMessage, { role: "tool_call" }> | undefined, chars: number): string {
+    if (tc?.name === "read_file_range") {
+      const p = (() => { try { return JSON.parse(tc.argsJson)?.path as string; } catch { return undefined; } })();
+      return `[elided to save context — earlier read of ${p ?? "a file"}; call read_file_range again if you still need those lines]`;
+    }
+    if (tc) return `[elided to save context — earlier ${tc.name} result (${chars} chars); re-run ${tc.name} if you still need it]`;
+    return `[elided to save context — ${chars} chars]`;
   }
 
   private buildBundle(task: string, claim: string, trace: string[], summaries: ToolExecutor["summaries"]): EvidenceBundle {

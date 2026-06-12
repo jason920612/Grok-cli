@@ -259,6 +259,19 @@ export class ContextEngine {
     return this.existence.has(normalizePath(path));
   }
 
+  /**
+   * Mark the read record for a specific region stale — used when its content is
+   * elided from the transcript to save context. This frees the duplicate-read
+   * guard so the model CAN re-read it (the content is no longer available), while
+   * a still-present read of a different range stays fresh.
+   */
+  staleRead(path: string, startLine: number, endLine: number): void {
+    const norm = normalizePath(path);
+    for (const r of this.reads) {
+      if (r.path === norm && r.startLine === startLine && r.endLine === endLine) r.stale = true;
+    }
+  }
+
   /** Invalidate all read records for a path after it is written (§9.5 step 4). */
   invalidateReads(path: string): void {
     const norm = normalizePath(path);
