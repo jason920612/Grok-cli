@@ -6,6 +6,7 @@ import { schemas } from "../toolSchemas.js";
 import { makeTool } from "./helpers.js";
 import { parseCodexPatch, applyCodexUpdate, codexPatchMetadata, type CodexAction } from "../codexPatch.js";
 import { findLazyMarkers } from "../lazyMarkers.js";
+import { sopViolation } from "../../agent/enforcement.js";
 import type { ToolSkillRegistry } from "../../tool-skills/ToolSkillRegistry.js";
 import type { PatchApprovalMetadata } from "../../approval/ApprovalPolicy.js";
 
@@ -32,10 +33,12 @@ export function applyPatchTool(skills: ToolSkillRegistry) {
       if (lazy.length > 0) {
         const detail = lazy.slice(0, 6).map((h) => `  • "${h.marker}"  →  ${h.line}`).join("\n");
         throw new Error(
-          `REJECTED — this patch contains lazy / placeholder / MVP markers, which are forbidden:\n${detail}\n` +
-            `This is exactly the corner-cutting behavior that is not allowed. Implement the COMPLETE, working logic here — ` +
-            `no placeholders, no "... rest unchanged", no "in a real implementation", no TODOs left for later, no mock/hardcoded stand-ins for real logic. ` +
-            `Re-submit the patch with the full implementation. If a piece genuinely belongs in a later step, build that step now rather than leaving a marker.`
+          sopViolation(
+            `REJECTED — this patch contains lazy / placeholder / MVP markers, which are forbidden:\n${detail}\n` +
+              `This is exactly the corner-cutting behavior that is not allowed. Implement the COMPLETE, working logic here — ` +
+              `no placeholders, no "... rest unchanged", no "in a real implementation", no TODOs left for later, no mock/hardcoded stand-ins for real logic. ` +
+              `Re-submit the patch with the full implementation. If a piece genuinely belongs in a later step, build that step now rather than leaving a marker.`
+          )
         );
       }
 

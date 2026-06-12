@@ -9,6 +9,7 @@ import type { ToolExecutionContext } from "../tools/AgentTool.js";
 import { TOOL_EFFECTS } from "../tools/toolEffects.js";
 import { readTextFile } from "../workspace/FileSystem.js";
 import { DoomLoopDetector } from "./DoomLoopDetector.js";
+import { sopViolation } from "./enforcement.js";
 import type { SkillLoader } from "../skills/SkillLoader.js";
 import type { ToolSkillRegistry } from "../tool-skills/ToolSkillRegistry.js";
 import type { ContextItem } from "../context/ContextItem.js";
@@ -193,7 +194,7 @@ export class AgentLoop {
         const blocked = this.applyZeroToolGuards(guards, guardCtx, state, executorTrace);
         if (blocked.action === "reprompt") {
           if (response.text) messages.push({ role: "assistant", content: response.text });
-          messages.push({ role: "user", content: blocked.feedback });
+          messages.push({ role: "user", content: sopViolation(blocked.feedback) });
           continue;
         }
         if (blocked.action === "terminate") {
@@ -234,10 +235,11 @@ export class AgentLoop {
           if (response.text) messages.push({ role: "assistant", content: response.text });
           messages.push({
             role: "user",
-            content:
+            content: sopViolation(
               `Your plan still has ${openSteps} step(s) pending or in_progress, but you are ending the turn. ` +
-              "Advance the remaining steps now — do the work, then mark them completed with update_plan. " +
-              "If a step is genuinely already done, update the plan to reflect that. If the task truly cannot proceed, state why."
+                "Advance the remaining steps now — do the work, then mark them completed with update_plan. " +
+                "If a step is genuinely already done, update the plan to reflect that. If the task truly cannot proceed, state why."
+            )
           });
           continue;
         }
@@ -259,7 +261,7 @@ export class AgentLoop {
       const allReadOnly = calls.every((c) => TOOL_EFFECTS[c.name]?.readOnly === true);
       if (calls.length > 1 && !allReadOnly) {
         if (response.text) messages.push({ role: "assistant", content: response.text });
-        messages.push({ role: "user", content: this.multiToolGuard.feedback(guardCtx) });
+        messages.push({ role: "user", content: sopViolation(this.multiToolGuard.feedback(guardCtx)) });
         continue;
       }
 
@@ -309,10 +311,11 @@ export class AgentLoop {
       if (noProgressStreak >= TUNING.guard.actionNudgeAfterNoProgress) {
         messages.push({
           role: "user",
-          content:
+          content: sopViolation(
             `You have run ${noProgressStreak} inspection steps without changing anything. ` +
-            "Stop gathering context now. If the task requires an edit, read the exact target lines if you have not, then make the change with apply_patch this turn. " +
-            "If the task is already answerable, give the final answer. Do not repeat reads or searches whose results are already above."
+              "Stop gathering context now. If the task requires an edit, read the exact target lines if you have not, then make the change with apply_patch this turn. " +
+              "If the task is already answerable, give the final answer. Do not repeat reads or searches whose results are already above."
+          )
         });
         noProgressStreak = 0;
       }
@@ -322,7 +325,7 @@ export class AgentLoop {
       const loopSig = calls.map((c) => `${c.name}:${(c.argsJson || "").replace(/\s+/g, "").slice(0, 200)}`).join("|");
       const verdict = this.doomLoop.record(loopSig);
       if (verdict.action === "warn") {
-        messages.push({ role: "user", content: DoomLoopDetector.corrective(verdict.count) });
+        messages.push({ role: "user", content: sopViolation(DoomLoopDetector.corrective(verdict.count)) });
         this.events.emit({ type: "warn", message: `Doom-loop warning: same operation repeated ${verdict.count}×` });
       } else if (verdict.action === "terminate") {
         this.events.emit({ type: "warn", message: `Doom-loop: turn terminated after ${verdict.count} repeats of the same operation` });

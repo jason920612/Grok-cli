@@ -2,6 +2,7 @@ import { z } from "zod";
 import { schemas } from "../toolSchemas.js";
 import { makeTool } from "./helpers.js";
 import type { ToolSkillRegistry } from "../../tool-skills/ToolSkillRegistry.js";
+import { sopViolation } from "../../agent/enforcement.js";
 
 /**
  * update_plan — Codex-style maintained plan (a step checklist with statuses).
@@ -33,7 +34,7 @@ export function updatePlanTool(skills: ToolSkillRegistry) {
       // commits to one active step at a time.
       const inProgress = args.plan.filter((p) => p.status === "in_progress").length;
       if (inProgress > 1) {
-        throw new Error(`A plan may have at most ONE step in_progress at a time (got ${inProgress}). Mark only the step you are actively working on as in_progress; the rest are pending or completed.`);
+        throw new Error(sopViolation(`A plan may have at most ONE step in_progress at a time (got ${inProgress}). Mark only the step you are actively working on as in_progress; the rest are pending or completed.`));
       }
       const content = renderPlan(args.plan, args.explanation);
       // No-op guard: re-recording an IDENTICAL plan is the classic orchestrator
